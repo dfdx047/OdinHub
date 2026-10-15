@@ -24,18 +24,18 @@ object AppInfo {
      * ATENÇÃO: confirma este endereço se o repositório for renomeado no GitHub. É o único sítio
      * onde o link existe — a UI e o botão de atualizações leem daqui.
      */
-    const val GITHUB_URL = "https://github.com/dfdevx2/OdinHub"
+    const val GITHUB_URL = "https://github.com/dfdx047/OdinHub"
 
     const val RELEASES_URL = "$GITHUB_URL/releases/latest"
 
     /** Descrição curta mostrada no cartão "Sobre". */
     const val TAGLINE_PT =
-        "Central de controlo de hardware e desempenho para o AYN Odin 3. " +
+        "Central de controlo de hardware e desempenho para os portáteis AYN Odin e Retroid Pocket. " +
             "Ajusta TDP, clocks de CPU/GPU, ventoinha e calibração de cor — " +
             "com perfis próprios por jogo, aplicados automaticamente."
 
     const val TAGLINE_EN =
-        "Hardware and performance control center for the AYN Odin 3. " +
+        "Hardware and performance control center for AYN Odin and Retroid Pocket handhelds. " +
             "Tune TDP, CPU/GPU clocks, fan behaviour and display calibration — " +
             "with per-game profiles applied automatically."
 }

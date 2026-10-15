@@ -15,8 +15,8 @@ android {
         applicationId = "com.dfdx047.odinhub"
         minSdk = 33
         targetSdk = 35
-        versionCode = 13
-        versionName = "0.7"
+        versionCode = 14
+        versionName = "0.8"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

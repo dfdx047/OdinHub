@@ -36,7 +36,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.dfdx047.odinhub.data.CustomProfile
+import com.dfdx047.odinhub.models.DeviceProfile
+import com.dfdx047.odinhub.models.SocFamily
 import com.dfdx047.odinhub.models.TdpProfiles
+import com.dfdx047.odinhub.tools.hardware.AutoTdpPause
+import com.dfdx047.odinhub.tools.hardware.AutoTdpTelemetry
 import com.dfdx047.odinhub.tools.hardware.ClockTableCuration
 import com.dfdx047.odinhub.tools.hardware.ClockTables
 import com.dfdx047.odinhub.tools.hardware.ThermalLimitModes
@@ -83,8 +87,58 @@ private fun PerfChip(
 }
 
 /**
+ * Cartão do aparelho detetado: nome, SoC, GPU e de onde vêm as tabelas. É o "Odin 2 detetado"
+ * permanente -- as tabelas de frequência, as zonas térmicas e os watts dos perfis seguem isto.
+ */
+@Composable
+fun DeviceInfoCard(device: DeviceProfile, tables: ClockTables, theme: ConsoleTheme, isEn: Boolean) {
+    val title = if (device.official) {
+        (if (isEn) "Detected: " else "Detectado: ") + device.name
+    } else {
+        device.name
+    }
+    val subtitle = listOf(device.soc.label, device.soc.gpuName).filter { it.isNotBlank() }.distinct().joinToString(" · ")
+    ConsoleCard(title, subtitle, theme, playClick = null) {
+        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+            Text(
+                if (device.official) {
+                    if (isEn) "Frequency tables, thermal zones, GPU control and TDP profiles adjusted for this device."
+                    else "Tabelas de frequência, zonas térmicas, controlo da GPU e perfis de TDP ajustados a este aparelho."
+                } else {
+                    if (isEn) "No dedicated profile for this device: using the kernel's live tables and generic limits."
+                    else "Sem perfil próprio para este aparelho: usando as tabelas do kernel e limites genéricos."
+                },
+                color = theme.text.copy(alpha = 0.7f), fontFamily = theme.fontFamily, fontSize = 11.sp,
+            )
+            val p = device.power
+            Text(
+                (if (isEn) "TDP: " else "TDP: ") +
+                    "${TdpProfiles.formatWatts(p.powerSave)} / ${TdpProfiles.formatWatts(p.balanced)} / ${TdpProfiles.formatWatts(p.tripleA)} · " +
+                    (if (isEn) "max " else "máx. ") + TdpProfiles.formatWatts(p.maxWatts) +
+                    (if (tables.isEmpty) "" else " · CPU ${tables.primeMHz.lastOrNull() ?: 0} MHz · GPU ${tables.gpuMHz.lastOrNull() ?: 0} MHz"),
+                color = theme.text.copy(alpha = 0.5f), fontFamily = theme.fontFamily, fontSize = 10.sp, modifier = Modifier.padding(top = 4.dp),
+            )
+        }
+    }
+}
+
+/** "a medir 9.8 W · CPU 72% · GPU 85%" (ou o motivo da pausa) para o cartão de TDP e o overlay. */
+fun autoTdpLine(t: AutoTdpTelemetry, isEn: Boolean): String? {
+    if (!t.active) return null
+    return when (t.paused) {
+        AutoTdpPause.CHARGING -> if (isEn) "AutoTDP on hold: plugged in (the battery can't measure power)" else "AutoTDP em pausa: ligado ao carregador (a bateria não mede o consumo)"
+        AutoTdpPause.SCREEN_OFF -> if (isEn) "AutoTDP paused (screen off)" else "AutoTDP em pausa (tela desligada)"
+        AutoTdpPause.NO_SENSOR -> if (isEn) "AutoTDP: no valid battery reading" else "AutoTDP: sem leitura válida da bateria"
+        null -> {
+            val watts = t.measuredWatts?.let { TdpProfiles.formatWatts(it) } ?: "--"
+            (if (isEn) "Measuring $watts" else "Medindo $watts") + " · CPU ${t.cpuPercent}% · GPU ${t.gpuPercent}%"
+        }
+    }
+}
+
+/**
  * Cartão "Perfis Globais de TDP": chips dos perfis fixos ([TdpProfiles.fixed]), presets do
- * utilizador, slider 1..25 W e gravação de preset. Os perfis são independentes do slider.
+ * utilizador, slider 1..máximo do aparelho e gravação de preset. Os perfis são independentes do slider.
  */
 @Composable
 fun TdpProfileCard(
@@ -92,6 +146,7 @@ fun TdpProfileCard(
     tdpProfileId: String,
     tdpValue: Float,
     customProfiles: List<CustomProfile>,
+    autoTdp: AutoTdpTelemetry,
     theme: ConsoleTheme,
     isEn: Boolean,
     onSelectProfile: (String) -> Unit,
@@ -167,6 +222,11 @@ fun TdpProfileCard(
                 enabled = enabled,
                 colors = SliderDefaults.colors(thumbColor = theme.primary, activeTrackColor = theme.primary),
             )
+            if (enabled) {
+                autoTdpLine(autoTdp, isEn)?.let { line ->
+                    Text(line, color = theme.primary.copy(alpha = 0.85f), fontFamily = theme.fontFamily, fontSize = 10.sp)
+                }
+            }
             Spacer(modifier = Modifier.height(12.dp))
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 OutlinedTextField(value = presetName, onValueChange = { presetName = it }, label = { Text(if (isEn) "Preset Name" else "Nome do Preset TDP", fontSize = 10.sp) }, modifier = Modifier.weight(1f).height(50.dp), textStyle = TextStyle(fontSize = 12.sp, color = theme.text), enabled = enabled)
@@ -239,6 +299,7 @@ fun ClockChipRow(
  */
 @Composable
 fun ManualClockCard(
+    soc: SocFamily,
     enabled: Boolean,
     tables: ClockTables,
     perfMHz: Float,
@@ -286,7 +347,7 @@ fun ManualClockCard(
 
             Spacer(modifier = Modifier.height(16.dp))
             ClockChipRow(
-                title = if (isEn) "Perf Cluster (Cluster 0)" else "Cluster Perf (Cluster 0)",
+                title = (if (isEn) "Perf Cluster" else "Cluster Perf") + soc.perfCores.takeIf { it.isNotBlank() }?.let { " ($it)" }.orEmpty(),
                 currentMHz = perfMHz,
                 tableMHz = tables.perfMHz,
                 enabled = enabled,
@@ -296,7 +357,7 @@ fun ManualClockCard(
 
             Spacer(modifier = Modifier.height(16.dp))
             ClockChipRow(
-                title = if (isEn) "Prime Cluster (Cluster 1)" else "Cluster Prime (Cluster 1)",
+                title = (if (isEn) "Prime Cluster" else "Cluster Prime") + soc.primeCores.takeIf { it.isNotBlank() }?.let { " ($it)" }.orEmpty(),
                 currentMHz = primeMHz,
                 tableMHz = tables.primeMHz,
                 enabled = enabled,
@@ -306,7 +367,7 @@ fun ManualClockCard(
 
             Spacer(modifier = Modifier.height(16.dp))
             ClockChipRow(
-                title = if (isEn) "GPU (independent)" else "GPU (independente)",
+                title = soc.gpuName + (if (isEn) " (independent)" else " (independente)"),
                 currentMHz = gpuMHz,
                 tableMHz = tables.gpuMHz,
                 enabled = enabled,
@@ -341,7 +402,7 @@ fun ThermalLimitCard(
     onDisableZoneMode: (Boolean) -> Unit,
     onRefresh: () -> Unit,
 ) {
-    val enabled = status.pServerAvailable
+    val enabled = status.pServerAvailable && status.supported
     var showUnthrottledDialog by remember { mutableStateOf(false) }
     var showZones by remember { mutableStateOf(false) }
     var showZoneModeDialog by remember { mutableStateOf(false) }
@@ -410,8 +471,14 @@ fun ThermalLimitCard(
         enabled = enabled,
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
-            if (!enabled) {
-                DisabledModeHint(if (isEn) "Requires PServerBinder (stock AYN firmware)" else "Requer o PServerBinder (firmware AYN de fábrica)", theme)
+            if (!status.supported) {
+                DisabledModeHint(
+                    if (isEn) "Not available on this device: MediaTek throttling is done by the vendor thermal service, not by kernel trip points"
+                    else "Indisponível neste aparelho: no MediaTek o throttling é feito pelo serviço térmico do fabricante, não pelos trip points do kernel",
+                    theme,
+                )
+            } else if (!enabled) {
+                DisabledModeHint(if (isEn) "Requires PServerBinder (stock AYN/Retroid firmware)" else "Requer o PServerBinder (firmware AYN/Retroid de fábrica)", theme)
             }
             if (status.fromAppOverride) {
                 val active = when (status.activeMode) {

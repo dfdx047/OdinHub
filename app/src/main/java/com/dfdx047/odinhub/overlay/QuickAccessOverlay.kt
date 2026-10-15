@@ -7,6 +7,7 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
@@ -56,8 +57,22 @@ class QuickAccessOverlay(
 
     private val density: Float get() = context.resources.displayMetrics.density
 
+    /** Posição vertical do puxador antes de expandir (o painel expandido usa y = 0). */
+    private var collapsedY = 0
+
+    /**
+     * Atalho / gesto "abrir overlay". Só abre se o puxador estiver visível (dentro de um jogo):
+     * antes, carregar no atalho no launcher marcava o painel como aberto sem nada aparecer, e ele
+     * surgia expandido -- e com o foco do comando -- por cima do jogo seguinte.
+     */
     fun toggle() {
-        setExpanded(!expandedFlow.value)
+        main.post {
+            if (expandedFlow.value) {
+                setExpanded(false)
+            } else if (host?.composeView?.visibility == View.VISIBLE) {
+                setExpanded(true)
+            }
+        }
     }
 
     fun show() {
@@ -67,13 +82,14 @@ class QuickAccessOverlay(
             val newHost = OverlayViewHost(context)
             val lp = newParams(expanded = false)
 
-            val losslessManager = LosslessManager(context)
+            // Só com o motor gráfico: era I/O de disco a cada recomposição do overlay, à toa.
+            val dllImported = com.dfdx047.odinhub.models.FeatureFlags.GRAPHICS_ENGINE_AVAILABLE && LosslessManager(context).isDllImported
 
             newHost.setContent {
                 val expanded by expandedFlow.collectAsState()
                 val rawTheme = AvailableThemes.getOrElse(prefs.selectedThemeIndex) { AvailableThemes[0] }
                 val currentTheme = getResolvedTheme(rawTheme, prefs.useAmoledBlack)
-                val isDllReady = losslessManager.isDllImported && prefs.globalLsfgEnabled
+                val isDllReady = dllImported && prefs.globalLsfgEnabled
 
                 // O pacote em primeiro plano e o mapa de regras vêm de StateFlows observados aqui
                 // dentro: é isto que faz esta composição re-chavear sozinha quando o utilizador
@@ -100,6 +116,21 @@ class QuickAccessOverlay(
                     onExpand = { setExpanded(true) },
                     onClose = { setExpanded(false) }
                 )
+            }
+
+            // O painel expandido é focável (recebe o comando), por isso Voltar ou B têm de o
+            // fechar -- antes não havia maneira de sair dele sem tocar no ecrã.
+            newHost.composeView.isFocusableInTouchMode = true
+            newHost.setKeyInterceptor { event ->
+                val keyCode = event.keyCode
+                val closeKey = keyCode == KeyEvent.KEYCODE_BACK || keyCode == KeyEvent.KEYCODE_BUTTON_B ||
+                    keyCode == KeyEvent.KEYCODE_ESCAPE
+                if (expandedFlow.value && closeKey) {
+                    if (event.action == KeyEvent.ACTION_UP) setExpanded(false)
+                    true
+                } else {
+                    false
+                }
             }
 
             newHost.composeView.setOnTouchListener { _, event ->
@@ -150,7 +181,7 @@ class QuickAccessOverlay(
      */
     fun setHandleVisible(visible: Boolean) {
         main.post {
-            if (!visible && expandedFlow.value) setExpanded(false)
+            if (expandedFlow.value && (!visible || host?.composeView?.visibility != View.VISIBLE)) setExpanded(false)
             host?.composeView?.visibility = if (visible) View.VISIBLE else View.GONE
         }
     }
@@ -167,9 +198,13 @@ class QuickAccessOverlay(
     private fun setExpanded(expanded: Boolean) {
         main.post {
             val lp = params ?: return@post
+            if (expanded && !expandedFlow.value) collapsedY = lp.y
             expandedFlow.value = expanded
             applyGeometry(lp, expanded)
+            // A posição arrastada do puxador voltava sempre ao centro depois de abrir/fechar.
+            if (!expanded) lp.y = collapsedY
             runCatching { windowManager?.updateViewLayout(host?.composeView, lp) }
+            if (expanded) host?.composeView?.requestFocus()
         }
     }
 

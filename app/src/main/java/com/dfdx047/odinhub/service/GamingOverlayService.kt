@@ -87,6 +87,9 @@ class GamingOverlayService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        // A sondagem vive no singleton do tracker: sem isto continuava a correr (UsageStats a
+        // cada 1.5 s) depois de o utilizador desligar o overlay.
+        foregroundTracker.stopFallbackDetection()
         scope.cancel()
         overlay?.hide()
         overlay = null

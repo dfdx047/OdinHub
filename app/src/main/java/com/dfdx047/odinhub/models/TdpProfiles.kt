@@ -22,16 +22,14 @@ data class TdpProfile(
  * ÚNICA fonte de verdade dos perfis de TDP. É usada pelo ecrã de Settings, pelo overlay em jogo e
  * pelo editor de regras por app, para que os três concordem sempre nos mesmos watts.
  *
- * Os valores vêm dos testes do próprio utilizador no Snapdragon 8 Elite (Odin 3):
- *  - Power Save = 11 W  (o mínimo para a maioria dos jogos/emuladores correr bem)
- *  - Balanced   = 12.5 W
- *  - Triple A   = 15 W
- *  - Stock      = sem limite
+ * Os watts dependem do APARELHO (ver [DeviceProfiles] / [PowerEnvelope]): no Odin 3 (8 Elite)
+ * vêm dos testes do próprio utilizador -- Power Save 11 W, Balanced 12.5 W, Triple A 15 W, slider
+ * até 25 W; num Odin 2 (8 Gen 2) ou num Retroid Pocket 5 (865) o mesmo "Balanced" é muito menos.
  *
  * Os perfis são INDEPENDENTES do slider: escolher um perfil aplica exatamente os watts dele e
  * marca-o como selecionado; arrastar o slider aplica o valor do slider e passa a seleção para
  * [ID_CUSTOM] (nenhum chip fica destacado). O id selecionado é persistido em
- * `SharedPrefsRepo.tdpProfileId`.
+ * `SharedPrefsRepo.tdpProfileId` -- por isso uma regra "Balanced" segue o aparelho onde corre.
  */
 object TdpProfiles {
 
@@ -41,9 +39,17 @@ object TdpProfiles {
     const val ID_STOCK = "stock"
     const val ID_CUSTOM = "custom"
 
+    /**
+     * Envelope de potência do aparelho atual. Em produção vem de `DeviceRegistry` (definido no
+     * arranque da app, ver OdinHubApplication); nos testes JVM pode ser trocado à vontade. Até lá
+     * vale o do Odin 3, o comportamento histórico da app.
+     */
+    @Volatile
+    var envelope: PowerEnvelope = PowerEnvelope(11f, 12.5f, 15f, 25f)
+
     /** Limites do slider de TDP, em watts, em todos os ecrãs. */
     const val TDP_MIN_WATTS = 1f
-    const val TDP_MAX_WATTS = 25f
+    val TDP_MAX_WATTS: Float get() = envelope.maxWatts
 
     /**
      * Sentinela usada para guardar "Stock (sem limite)" nos campos `Float` que não podem ser
@@ -52,34 +58,37 @@ object TdpProfiles {
      */
     const val STOCK_SENTINEL_WATTS = 0f
 
-    val POWER_SAVE = TdpProfile(
-        id = ID_POWER_SAVE,
-        labelPt = "Power Save",
-        labelEn = "Power Save",
-        watts = 11f,
-        descriptionPt = "Mínimo para a maioria dos jogos/emuladores no 8 Elite",
-        descriptionEn = "Minimum for most games/emulators on the 8 Elite",
-    )
+    val POWER_SAVE: TdpProfile
+        get() = TdpProfile(
+            id = ID_POWER_SAVE,
+            labelPt = "Power Save",
+            labelEn = "Power Save",
+            watts = envelope.powerSave,
+            descriptionPt = "Mínimo para a maioria dos jogos/emuladores",
+            descriptionEn = "Minimum for most games/emulators",
+        )
 
-    val BALANCED = TdpProfile(
-        id = ID_BALANCED,
-        labelPt = "Balanced",
-        labelEn = "Balanced",
-        watts = 12.5f,
-        descriptionPt = "Equilíbrio entre autonomia e desempenho",
-        descriptionEn = "Balance between battery life and performance",
-    )
+    val BALANCED: TdpProfile
+        get() = TdpProfile(
+            id = ID_BALANCED,
+            labelPt = "Balanced",
+            labelEn = "Balanced",
+            watts = envelope.balanced,
+            descriptionPt = "Equilíbrio entre autonomia e desempenho",
+            descriptionEn = "Balance between battery life and performance",
+        )
 
-    val TRIPLE_A = TdpProfile(
-        id = ID_TRIPLE_A,
-        labelPt = "Triple A",
-        labelEn = "Triple A",
-        watts = 15f,
-        descriptionPt = "Para jogos pesados; mais calor e menos autonomia",
-        descriptionEn = "For demanding games; more heat, less battery",
-    )
+    val TRIPLE_A: TdpProfile
+        get() = TdpProfile(
+            id = ID_TRIPLE_A,
+            labelPt = "Triple A",
+            labelEn = "Triple A",
+            watts = envelope.tripleA,
+            descriptionPt = "Para jogos pesados; mais calor e menos autonomia",
+            descriptionEn = "For demanding games; more heat, less battery",
+        )
 
-    val STOCK = TdpProfile(
+    val STOCK: TdpProfile = TdpProfile(
         id = ID_STOCK,
         labelPt = "Stock",
         labelEn = "Stock",
@@ -89,7 +98,7 @@ object TdpProfiles {
     )
 
     /** Os perfis fixos, na ordem em que aparecem nos chips. */
-    val fixed: List<TdpProfile> = listOf(POWER_SAVE, BALANCED, TRIPLE_A, STOCK)
+    val fixed: List<TdpProfile> get() = listOf(POWER_SAVE, BALANCED, TRIPLE_A, STOCK)
 
     fun byId(id: String?): TdpProfile? = fixed.firstOrNull { it.id == id }
 
@@ -102,6 +111,9 @@ object TdpProfiles {
     /** `true` quando o valor guardado é a sentinela de "sem limite" -- ver [STOCK_SENTINEL_WATTS]. */
     fun isStockWatts(watts: Float): Boolean = watts < TDP_MIN_WATTS
 
+    /** Encaixa watts no intervalo do slider do aparelho atual. */
+    fun clampWatts(watts: Float): Float = watts.coerceIn(TDP_MIN_WATTS, TDP_MAX_WATTS)
+
     /**
      * Resolve o que deve ser aplicado ao hardware a partir do id persistido e do valor do slider:
      * `null` = Stock (sem limite); caso contrário os watts exatos (perfil fixo, ou o slider para
@@ -111,7 +123,7 @@ object TdpProfiles {
         if (profileId == ID_STOCK) return null
         val fixedProfile = byId(profileId)
         if (fixedProfile != null) return fixedProfile.watts
-        return sliderWatts.coerceIn(TDP_MIN_WATTS, TDP_MAX_WATTS)
+        return clampWatts(sliderWatts)
     }
 
     /** Codifica um valor resolvido ([resolveWatts]) num `Float` para campos não-nulos (Room). */

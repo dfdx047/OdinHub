@@ -5,13 +5,13 @@
 <h1 align="center">Odin Hub</h1>
 
 <p align="center">
-  A console-style hardware and performance control center for the <b>AYN Odin 3</b>.<br>
-  Built by <b>dfdevx2</b>.
+  A console-style hardware and performance control center for <b>AYN Odin</b> and <b>Retroid Pocket</b> handhelds.<br>
+  Built by <b>dfdx047</b>.
 </p>
 
 <p align="center">
-  <a href="https://github.com/dfdevx2/OdinHub/releases/latest"><img src="https://img.shields.io/github/v/release/dfdevx2/OdinHub?include_prereleases&label=download&style=for-the-badge" alt="Latest release"></a>
-  <img src="https://img.shields.io/badge/device-AYN%20Odin%203-7c6cf0?style=for-the-badge" alt="AYN Odin 3">
+  <a href="https://github.com/dfdx047/OdinHub/releases/latest"><img src="https://img.shields.io/github/v/release/dfdx047/OdinHub?include_prereleases&label=download&style=for-the-badge" alt="Latest release"></a>
+  <img src="https://img.shields.io/badge/devices-Odin%202%20%7C%20Odin%203%20%7C%20Thor%20%7C%20Retroid-7c6cf0?style=for-the-badge" alt="AYN Odin / Thor / Retroid Pocket">
   <img src="https://img.shields.io/badge/root-not%20required-2ea44f?style=for-the-badge" alt="No root required">
 </p>
 
@@ -23,7 +23,7 @@
 
 ## What this is
 
-The Odin 3 ships with a Snapdragon 8 Elite that is far more powerful than most Android games and emulators need. Left alone, it runs hot, drains the battery fast, and throttles — all to render a PS2 game that would have been happy with a third of that power.
+The Odin 3 ships with a Snapdragon 8 Elite (and the Odin 2, Thor and Retroid Pocket 6 with an 8 Gen 2) that is far more powerful than most Android games and emulators need. Left alone, it runs hot, drains the battery fast, and throttles — all to render a PS2 game that would have been happy with a third of that power.
 
 Odin Hub is the layer that sits between you and that silicon. It lets you decide, **per game**, how much of the device to actually spend:
 
@@ -75,10 +75,10 @@ Change a game in one place and the other reflects it. There is no second source 
 ## Features
 
 ### Performance
-- **Dynamic TDP** — a closed loop that reads real-time power draw and walks CPU/GPU clocks down until the device settles at your target wattage (1–25 W), instead of a fixed frequency guess.
-- **TDP profiles** — Power Save (11 W), Balanced (12.5 W) and Triple A (15 W), tuned on the Snapdragon 8 Elite, plus Stock (no limit). Profiles are independent from the free slider.
-- **Per-cluster clock control** — the real frequencies of each CPU cluster (Perf / Prime) and the Adreno GPU, read live from the kernel's OPP tables (with the real SM8750 / SM8550 tables as fallback). Only one of TDP or manual clocks is active at a time.
-- **Thermal limit** — optionally move the first-stage passive trip points of the CPU/GPU thermal zones (85 / 90 / 95 °C or unthrottled), globally or per game. Written through PServerBinder like everything else — no KernelSU/Magisk needed. Emergency trips are never touched, and Stock restores the factory values.
+- **Dynamic TDP (AutoTDP)** — a closed loop that measures real-time power draw on the battery and walks CPU/GPU clocks until the device settles at your target wattage. It filters the noisy battery reading, cuts fast when over budget and raises slowly when under (no saw-tooth stutter), and — when the GPU is the bottleneck — takes the cut from the CPU instead (and vice versa). It pauses while charging (the battery can't measure the device then) and with the screen off.
+- **TDP profiles** — Power Save, Balanced and Triple A, sized for **the device it's running on** (11 / 12.5 / 15 W on the Odin 3; less on an 8 Gen 2 or a Snapdragon 865), plus Stock (no limit). Profiles are independent from the free slider.
+- **Per-cluster clock control** — the real frequencies of each CPU cluster (Perf / Prime) and the GPU, read live from the kernel's OPP tables, with a static per-SoC table as fallback. Only one of TDP or manual clocks is active at a time.
+- **Thermal limit** — optionally move the first-stage passive trip points of the CPU/GPU thermal zones (85 / 90 / 95 °C or unthrottled), globally or per game. Written through PServerBinder like everything else — no KernelSU/Magisk needed. Emergency trips and **fan trips** are never touched, and Stock restores the factory values (the backup is tied to the current boot, so it can never "restore" a modified value).
 - **Fan control** — Stock, Quiet, Smart and Sport, mapped to the device's real fan modes.
 - **Custom profiles** — save your own TDP or clock presets by name.
 
@@ -96,33 +96,57 @@ Change a game in one place and the other reflects it. There is no second source 
 - D-pad navigable with haptic feedback and focus glow.
 - Animated boot sequence, custom wallpapers, and an integrated BGM/SFX mixer.
 
+## Supported devices
+
+Odin Hub detects the device on launch ("AYN Odin 2 detected") and switches the frequency tables, thermal zones, GPU control and TDP profiles to match. Everything else — overlay, per-game rules, macros, gestures — is the same on all of them: AYN and Retroid build on the same ODM firmware (Moorechip) and ship the same `PServerBinder` helper.
+
+| Device | SoC | GPU control | Thermal limit | M1/M2 |
+|---|---|---|---|---|
+| AYN Odin 3 | Snapdragon 8 Elite | Adreno 830 (kgsl) | ✓ | ✓ |
+| AYN Odin 2 / Odin 2 Max / Odin 2 Portal | Snapdragon 8 Gen 2 (QCS8550) | Adreno 740, 680 MHz | ✓ | ✓ |
+| AYN Odin 2 Mini | Snapdragon 8 Gen 2 | Adreno 740 | ✓ | ✓ |
+| AYN Thor | Snapdragon 8 Gen 2 | Adreno 740 | ✓ | ✓ |
+| AYN Thor Lite | Snapdragon 865 | Adreno 650 | ✓ | ✓ |
+| Retroid Pocket 6 / Retroid Pocket Nova | Snapdragon 8 Gen 2 (QCS8550) | Adreno 740 | ✓ | if the firmware exposes them |
+| Retroid Pocket 5 / Mini / Mini V2 | Snapdragon 865 | Adreno 650, 670 MHz | ✓ | if the firmware exposes them |
+| Retroid Pocket 4 Pro | Dimensity 1100 | Mali-G77 (MediaTek GED) | — (MediaTek throttles in userspace) | if the firmware exposes them |
+| Retroid Pocket 4 | Dimensity 900 | Mali-G68 (MediaTek GED) | — | if the firmware exposes them |
+
+Notes:
+
+- The Odin 3 profile is the tested one. The watt figures of the TDP profiles on the other devices are **starting estimates** from each SoC's typical gaming power and chassis size — tune them to taste with the slider.
+- On the 8 Gen 2, the kernel thermal zones carry passive trips at 50–85 °C that drive the **fan**, not throttling; Odin Hub excludes them (by their cooling device and by a per-SoC minimum temperature) so a thermal limit never delays the fan.
+- On the Thor and the Retroid Pocket 6 the firmware raises each cluster's minimum frequency according to its own performance mode. When a cap goes below that floor, Odin Hub lowers the floor too, so the cap actually holds.
+- Some firmwares (the Odin 2 Mini is the known case) don't return command output through PServerBinder. Odin Hub detects that, switches to output-less mode and reads values straight from sysfs instead.
+- Unknown devices still work in a generic mode: live kernel tables and the limits of the closest known SoC.
+
 ## How it talks to the hardware
 
 Odin Hub does not run `su` and needs no KernelSU/Magisk. It reaches a privileged helper already present on the device — `PServerBinder`, which runs as root — through `IBinder.transact()`, a technique pioneered by **ClusterTune** and **P.U.L.S.E.** (see Credits). Through that channel it writes to `sysfs` nodes and Android system settings.
 
 Two consequences worth knowing:
 
-1. **Every write is verified.** After writing a frequency, the value is read back from `sysfs` and compared. A write that the kernel silently rejected is reported as a failure rather than assumed to have worked — the UI surfaces it instead of showing a slider that "moved" while nothing happened.
+1. **Every write is verified, and only made when needed.** Before writing, the node is read directly (no root needed); if it already holds the value, nothing is sent. After writing, the value is read back and compared with what was there before — a write the kernel silently rejected is reported as a failure rather than assumed to have worked. In Stock mode the nodes are handed back to the system and left alone.
 2. **Nodes are written independently.** An earlier design chained every node into one `cmd && cmd && cmd` string, so a single rejected node (a GPU clock locked by the bootloader, say) aborted every write after it. Each node now succeeds or fails on its own.
 
 Foreground-app detection runs through an accessibility service, with a `UsageStatsManager` poll as a fallback so per-game rules and the overlay keep working even if that service is disabled.
 
 ## Requirements
 
-- AYN Odin 3.
-- The `PServerBinder` helper available on the device (present on stock AYN firmware).
+- One of the devices above (or another Android handheld in generic mode).
+- The `PServerBinder` helper available on the device (present on stock AYN and Retroid firmware).
 - Permissions granted at first launch: **Usage Access** (foreground-app detection) and **Display over other apps** (the in-game overlay).
 
 ## Installing
 
-1. Download the latest APK from the [Releases](https://github.com/dfdevx2/OdinHub/releases/latest) page.
-2. Install it on your Odin 3.
+1. Download the latest APK from the [Releases](https://github.com/dfdx047/OdinHub/releases/latest) page.
+2. Install it on your device.
 3. Launch it and grant the two permissions it asks for.
 
 ## Building
 
 ```bash
-git clone https://github.com/dfdevx2/OdinHub.git
+git clone https://github.com/dfdx047/OdinHub.git
 cd OdinHub
 ./gradlew assembleDebug
 ```

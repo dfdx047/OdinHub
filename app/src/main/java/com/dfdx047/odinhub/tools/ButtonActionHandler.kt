@@ -42,7 +42,11 @@ class ButtonActionHandler @Inject constructor(
     private val executor: ShellExecutor,
     private val prefs: SharedPrefsRepo,
     private val foregroundTracker: ForegroundAppTracker,
+    private val capabilities: DeviceCapabilities,
 ) {
+    /** O aparelho tem botões traseiros M1/M2 remapeáveis? (para o overlay esconder o separador) */
+    val backButtons: kotlinx.coroutines.flow.StateFlow<Boolean> get() = capabilities.backButtons
+
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val main = Handler(Looper.getMainLooper())
     private var serviceRef: WeakReference<AccessibilityService>? = null
@@ -143,18 +147,59 @@ class ButtonActionHandler @Inject constructor(
     @Synchronized
     fun syncTriggers() {
         for (button in listOf("m1", "m2")) {
-            val setting = if (button == "m1") SettingsRepo.KEY_CUSTOM_M1_VALUE else SettingsRepo.KEY_CUSTOM_M2_VALUE
+            val setting = settingFor(button)
             val trigger = if (button == "m1") ButtonMacros.TRIGGER_M1 else ButtonMacros.TRIGGER_M2
             val want = effectiveSteps(button) != null
-            val current = executor.getIntSystemSetting(setting, 0)
+            // Leitura falhada NÃO é "0": antes, uma falha guardava 0 como backup e o mapeamento
+            // original do utilizador perdia-se quando a macro era desligada.
+            val current = executor.getIntSystemSettingOrNull(setting) ?: readSettingDirect(setting) ?: continue
             if (want && current != trigger) {
-                prefs.setMacroNativeBackup(button, current)
+                // Nunca guardar uma tecla-gatilho como "original" (a do outro botão também não).
+                if (current != ButtonMacros.TRIGGER_M1 && current != ButtonMacros.TRIGGER_M2) {
+                    prefs.setMacroNativeBackup(button, current)
+                }
                 executor.setIntSystemSetting(setting, trigger)
             } else if (!want && current == trigger) {
-                executor.setIntSystemSetting(setting, prefs.macroNativeBackup(button).coerceAtLeast(0))
+                val backup = prefs.macroNativeBackup(button)
+                if (backup < 0) {
+                    Log.w(TAG, "syncTriggers: sem mapeamento original guardado para $button; a deixar o botão sem tecla")
+                }
+                // Se a reposição falhar, o backup fica e o próximo sync tenta de novo.
+                executor.setIntSystemSetting(setting, backup.coerceAtLeast(0))
             }
         }
     }
+
+    /**
+     * Grava um mapeamento NATIVO escolhido pelo utilizador, sob o mesmo monitor que o
+     * [syncTriggers] -- uma troca de app a meio já não repõe o mapeamento antigo por cima.
+     * O novo valor passa também a ser o "original" a repor quando uma macro for desligada.
+     */
+    @Synchronized
+    fun setNativeMapping(setting: String, keyCode: Int) {
+        val button = when (setting) {
+            SettingsRepo.KEY_CUSTOM_M1_VALUE -> "m1"
+            SettingsRepo.KEY_CUSTOM_M2_VALUE -> "m2"
+            else -> null
+        }
+        if (button != null && keyCode != ButtonMacros.TRIGGER_M1 && keyCode != ButtonMacros.TRIGGER_M2) {
+            prefs.setMacroNativeBackup(button, keyCode)
+        }
+        executor.setIntSystemSetting(setting, keyCode)
+        // Uma macro POR JOGO ativa agora ainda precisa da tecla-gatilho neste botão.
+        if (button != null) syncTriggers()
+    }
+
+    /**
+     * Leitura sem root, para firmwares cujo PServer não devolve saída (Odin 2 Mini). Pode ser
+     * recusada pelo Android para chaves não-públicas -- aí devolve null e o botão é ignorado.
+     */
+    private fun readSettingDirect(setting: String): Int? = runCatching {
+        android.provider.Settings.System.getString(context.contentResolver, setting)?.trim()?.toIntOrNull()
+    }.getOrNull()
+
+    private fun settingFor(button: String) =
+        if (button == "m1") SettingsRepo.KEY_CUSTOM_M1_VALUE else SettingsRepo.KEY_CUSTOM_M2_VALUE
 
     // ------------------------------------------------------------------ gravação de ecrã
 
@@ -167,54 +212,82 @@ class ButtonActionHandler @Inject constructor(
      * ficheiro (_2, _3...) enquanto a flag existir. Tenta primeiro 30 min por segmento e, se esta
      * versão do Android recusar (sai logo com erro), cai para 180 s -- sem sobrescrever nada.
      */
+    private val recordingMutex = kotlinx.coroutines.sync.Mutex()
+
     fun toggleScreenRecording() {
         scope.launch {
-            // O estado real é a flag em disco (o laço de gravação sobrevive à morte do processo
-            // da app); o campo em memória é só uma pista.
-            val flagExists = executor.executeAsRoot("[ -f $REC_FLAG ] && echo REC_ON").getOrNull()?.contains("REC_ON") == true
-            if (flagExists || isRecording) stopRecording() else startRecording()
+            // Dois toques rápidos já não arrancam dois laços: a decisão é serializada.
+            if (!recordingMutex.tryLock()) return@launch
+            try {
+                // O estado real é a flag + o processo (o laço sobrevive à morte do processo da
+                // app); a flag sozinha não chega -- pode ter sobrado de um crash.
+                // Sem captura de saída (Odin 2 Mini) não há como perguntar ao sistema: vale o
+                // estado em memória.
+                val canAsk = executor.outputCaptureWorks
+                val state = if (canAsk) executor.executeAsRoot("[ -f $REC_FLAG ] && echo REC_FLAG; pidof screenrecord > /dev/null && echo REC_PID").getOrNull().orEmpty() else ""
+                val running = if (canAsk) state.contains("REC_PID") || (isRecording && state.contains("REC_FLAG")) else isRecording
+                if (running) {
+                    stopRecording()
+                } else {
+                    if (state.contains("REC_FLAG")) executor.executeAsRoot("rm -f $REC_FLAG")
+                    startRecording()
+                }
+                delay(TOGGLE_GUARD_MS)
+            } finally {
+                recordingMutex.unlock()
+            }
         }
     }
 
-    private fun startRecording() {
+    private suspend fun startRecording() {
         val base = "OdinHub_" + SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
         recordingBase = base
         isRecording = true
         toast(if (isEn) "Screen recording started" else "Gravação de ecrã iniciada")
-        scope.launch {
-            val loop = "i=1; while [ -f $REC_FLAG ]; do " +
-                "screenrecord --bit-rate $REC_BITRATE --time-limit 1800 $REC_DIR/${base}_\$i.mp4 || " +
-                "{ [ -f $REC_FLAG ] && screenrecord --bit-rate $REC_BITRATE --time-limit 180 $REC_DIR/${base}_\${i}b.mp4; }; " +
-                "i=\$((i+1)); done"
-            val cmd = "mkdir -p $REC_DIR ; touch $REC_FLAG ; ( $loop ) > /dev/null 2>&1 < /dev/null &"
-            executor.executeAsRoot(cmd)
-            delay(1500)
-            val running = executor.executeAsRoot("pidof screenrecord").getOrNull().orEmpty().isNotBlank()
-            if (!running) {
-                isRecording = false
-                executor.executeAsRoot("rm -f $REC_FLAG")
-                toast(if (isEn) "Could not start screen recording" else "Não foi possível iniciar a gravação")
-            }
+        // Cada segmento que morre em menos de 3 s conta como falha; 3 seguidas (codificador
+        // ocupado, ecrã protegido, pasta ilegível...) desligam o laço. Antes ele relançava o
+        // screenrecord sem pausa, como root, para sempre -- a encher a pasta de ficheiros vazios.
+        val loop = "i=1; f=0; while [ -f $REC_FLAG ]; do " +
+            "t0=\$(date +%s); " +
+            "screenrecord --bit-rate $REC_BITRATE --time-limit 1800 $REC_DIR/${base}_\$i.mp4 || " +
+            "{ [ -f $REC_FLAG ] && screenrecord --bit-rate $REC_BITRATE --time-limit 180 $REC_DIR/${base}_\${i}b.mp4; }; " +
+            "if [ \$(( \$(date +%s) - t0 )) -lt 3 ]; then f=\$((f+1)); sleep 1; else f=0; fi; " +
+            "[ \$f -ge 3 ] && rm -f $REC_FLAG; " +
+            "i=\$((i+1)); done"
+        val cmd = "mkdir -p $REC_DIR ; touch $REC_FLAG ; ( $loop ) > /dev/null 2>&1 < /dev/null &"
+        executor.executeAsRoot(cmd)
+        if (!executor.outputCaptureWorks) return // não dá para confirmar; o laço desliga-se sozinho se falhar
+        delay(2500)
+        // A gravar de verdade = a flag continua lá e há um screenrecord vivo.
+        val state = executor.executeAsRoot("[ -f $REC_FLAG ] && echo REC_FLAG; pidof screenrecord > /dev/null && echo REC_PID").getOrNull().orEmpty()
+        if (!state.contains("REC_FLAG") || !state.contains("REC_PID")) {
+            isRecording = false
+            executor.executeAsRoot("rm -f $REC_FLAG")
+            toast(if (isEn) "Could not start screen recording" else "Não foi possível iniciar a gravação")
         }
     }
 
-    private fun stopRecording() {
+    private suspend fun stopRecording() {
         isRecording = false
         val base = recordingBase
-        scope.launch {
-            // Primeiro a flag (para o laço não abrir outro segmento), depois SIGINT: é o sinal
-            // com que o screenrecord fecha o MP4 corretamente.
-            executor.executeAsRoot("rm -f $REC_FLAG")
-            executor.executeAsRoot("pkill -INT screenrecord")
-            delay(1500)
-            val files = executor.executeAsRoot("ls $REC_DIR").getOrNull().orEmpty()
-                .lines().map { it.trim() }
-                .filter { it.endsWith(".mp4") && (base == null || it.startsWith(base)) }
-                .map { "$SCAN_DIR/$it" }
-            if (files.isNotEmpty()) {
-                MediaScannerConnection.scanFile(context, files.toTypedArray(), null, null)
-            }
+        // Primeiro a flag (para o laço não abrir outro segmento), depois SIGINT: é o sinal
+        // com que o screenrecord fecha o MP4 corretamente.
+        executor.executeAsRoot("rm -f $REC_FLAG")
+        executor.executeAsRoot("pkill -INT screenrecord")
+        delay(1500)
+        val files = executor.executeAsRoot("ls $REC_DIR").getOrNull().orEmpty()
+            .lines().map { it.trim() }
+            .filter { it.endsWith(".mp4") && (base == null || it.startsWith(base)) }
+            .map { "$SCAN_DIR/$it" }
+        if (files.isNotEmpty()) {
+            MediaScannerConnection.scanFile(context, files.toTypedArray(), null, null)
             toast(if (isEn) "Recording saved to Movies/OdinHub" else "Gravação guardada em Movies/OdinHub")
+        } else if (base != null) {
+            toast(if (isEn) "Recording stopped (no file was saved)" else "Gravação parada (nenhum arquivo salvo)")
+        } else {
+            // Gravação de antes de o processo ter reiniciado: não sabemos o nome dos ficheiros.
+            MediaScannerConnection.scanFile(context, arrayOf(SCAN_DIR), null, null)
+            toast(if (isEn) "Recording stopped — see Movies/OdinHub" else "Gravação parada — veja Movies/OdinHub")
         }
     }
 
@@ -229,5 +302,8 @@ class ButtonActionHandler @Inject constructor(
         const val REC_FLAG = "/data/local/tmp/odinhub_rec.flag"
         const val REC_BITRATE = 20_000_000
         val PACKAGE_NAME = Regex("[A-Za-z0-9_.]+")
+
+        /** Ignora um segundo toque logo a seguir (duplo clique acidental no gesto). */
+        const val TOGGLE_GUARD_MS = 800L
     }
 }

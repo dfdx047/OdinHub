@@ -43,22 +43,67 @@ private val SHELL_METACHARACTERS = charArrayOf(
 
 private fun String.containsShellMetacharacters(): Boolean = any { it in SHELL_METACHARACTERS }
 
+/** Aspas simples de shell: `it's` -> `'it'\''s'`. Para qualquer texto não-constante num comando root. */
+fun shellQuote(value: String): String = "'" + value.replace("'", "'\\''") + "'"
+
 @Singleton
 @SuppressLint("DiscouragedPrivateApi", "PrivateApi")
 class ShellExecutor @Inject constructor() {
 
-    private val binder: IBinder?
-    var pServerAvailable: Boolean = false
-        private set
+    /**
+     * Binder do PServer. Já não é resolvido uma única vez para sempre: se o serviço morrer ou se a
+     * app arrancar (ex: no BOOT_COMPLETED) antes de ele estar registado, voltamos a pedi-lo ao
+     * ServiceManager em vez de ficar sem root até o processo morrer.
+     */
+    @Volatile
+    private var binder: IBinder? = lookupBinder()
 
-    init {
-        binder = runCatching {
-            val serviceManager = Class.forName("android.os.ServiceManager")
-            val getService = serviceManager.getDeclaredMethod("getService", String::class.java)
-            val binder = getService.invoke(serviceManager, "PServerBinder") as IBinder
-            pServerAvailable = true
-            binder
-        }.getOrDefault(null)
+    val pServerAvailable: Boolean get() = currentBinder() != null
+
+    /**
+     * Segundo elemento do pedido ao PServer: "1" = devolver a saída do comando, "0" = sem saída.
+     * Há firmwares (o Odin 2 Mini é o caso conhecido) em que os pedidos com captura de saída não
+     * correm de forma fiável. Testamos uma vez; se a captura não funcionar passamos a "0" e as
+     * leituras fazem-se diretamente aos ficheiros (os nós de sysfs são legíveis sem root).
+     */
+    @Volatile
+    private var captureFlag = "1"
+
+    @Volatile
+    private var captureProbed = false
+
+    /** `false` quando o PServer deste firmware não devolve a saída dos comandos. */
+    val outputCaptureWorks: Boolean
+        get() {
+            probeCaptureIfNeeded()
+            return captureFlag == "1"
+        }
+
+    private fun lookupBinder(): IBinder? = runCatching {
+        val serviceManager = Class.forName("android.os.ServiceManager")
+        val getService = serviceManager.getDeclaredMethod("getService", String::class.java)
+        getService.invoke(serviceManager, "PServerBinder") as IBinder?
+    }.getOrNull()
+
+    private fun currentBinder(): IBinder? {
+        val cached = binder
+        if (cached != null && cached.isBinderAlive) return cached
+        return lookupBinder().also { binder = it }
+    }
+
+    @Synchronized
+    private fun probeCaptureIfNeeded() {
+        if (captureProbed) return
+        // Sem binder (ainda) não se marca a prova como feita: tenta-se de novo quando existir.
+        val b = currentBinder() ?: return
+        captureProbed = true
+        val first = transactRaw(b, "echo $PROBE_TOKEN", "1")
+        if (first.getOrNull()?.contains(PROBE_TOKEN) == true) return
+        // Segunda prova, com um comando externo: só desistimos da captura se as duas falharem.
+        val second = transactRaw(b, "cat /proc/sys/kernel/random/boot_id", "1")
+        if (!second.getOrNull().isNullOrBlank()) return
+        captureFlag = "0"
+        Log.w(TAG, "PServer sem captura de saída neste firmware: a usar o modo '0' (leituras diretas)")
     }
 
     /**
@@ -71,16 +116,27 @@ class ShellExecutor @Inject constructor() {
     val canWriteSysfs: Boolean get() = pServerAvailable
 
     fun executeAsRoot(cmd: String): Result<String?> {
-        val localBinder = binder
+        val localBinder = currentBinder()
         if (localBinder == null) {
             Log.w(TAG, "executeAsRoot: PServerBinder indisponível, comando descartado: $cmd")
             return Result.failure(IllegalStateException("PServerBinder not available"))
         }
+        probeCaptureIfNeeded()
+        val result = transactRaw(localBinder, cmd, captureFlag)
+        // Binder morto (o PServer reiniciou): pede-o de novo e tenta uma vez.
+        if (result.exceptionOrNull() is android.os.DeadObjectException) {
+            binder = null
+            val fresh = currentBinder() ?: return result
+            return transactRaw(fresh, cmd, captureFlag)
+        }
+        return result
+    }
 
+    private fun transactRaw(localBinder: IBinder, cmd: String, flag: String): Result<String?> {
         val data = Parcel.obtain()
         val reply = Parcel.obtain()
         try {
-            data.writeStringArray(arrayOf(cmd, "1"))
+            data.writeStringArray(arrayOf(cmd, flag))
 
             val delivered = runCatching { localBinder.transact(0, data, reply, 0) }
                 .getOrElse {
@@ -98,9 +154,10 @@ class ShellExecutor @Inject constructor() {
                 return Result.failure(PServerTransactionRejectedException(cmd))
             }
 
-            val result = reply.createByteArray()?.toString(Charset.defaultCharset())?.trim()?.let {
-                if (it == "null") null else it
-            }
+            // Em modo "0" a resposta pode vir vazia: não é erro, só não há saída.
+            val result = runCatching { reply.createByteArray() }.getOrNull()
+                ?.toString(Charset.defaultCharset())?.trim()
+                ?.takeIf { it.isNotEmpty() && it != "null" }
             return Result.success(result)
         } finally {
             data.recycle()
@@ -110,7 +167,17 @@ class ShellExecutor @Inject constructor() {
 
     private companion object {
         const val TAG = "ShellExecutor"
+        const val PROBE_TOKEN = "odinhub_probe_ok"
     }
+
+    /** `settings get system <key>`, ou `null` se a chave não existir / a leitura falhar. */
+    fun getSystemSettingOrNull(setting: String): String? {
+        if (!isSafeForCommand(setting)) return null
+        return getSystemSetting(setting).getOrNull()
+    }
+
+    /** Como [getIntSystemSetting], mas `null` numa falha -- para quem não pode confundir falha com 0. */
+    fun getIntSystemSettingOrNull(setting: String): Int? = getSystemSettingOrNull(setting)?.trim()?.toIntOrNull()
 
     private fun getProperty(property: String): Result<String?> {
         return executeAsRoot("getprop $property")
@@ -181,8 +248,9 @@ class ShellExecutor @Inject constructor() {
             .getOrDefault(defaultValue)
     }
 
-    fun setIntSystemSetting(setting: String, value: Int) {
-        executeAsRoot("settings put system $setting $value")
+    fun setIntSystemSetting(setting: String, value: Int): Boolean {
+        if (!isSafeForCommand(setting)) return false
+        return executeAsRoot("settings put system $setting $value").isSuccess
     }
 
     fun getBooleanSystemSetting(setting: String, defaultValue: Boolean): Boolean {
@@ -219,6 +287,7 @@ class ShellExecutor @Inject constructor() {
     }
 
     fun setIntValue(file: String, value: Int) {
+        if (!isSafeForCommand(file)) return
         executeAsRoot("echo $value > $file")
     }
 
@@ -229,6 +298,7 @@ class ShellExecutor @Inject constructor() {
     }
 
     fun setFloatValue(file: String, value: Float) {
+        if (!isSafeForCommand(file)) return
         executeAsRoot("echo $value > $file")
     }
 

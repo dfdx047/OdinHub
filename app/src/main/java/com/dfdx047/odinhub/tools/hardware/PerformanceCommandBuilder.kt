@@ -66,16 +66,70 @@ data class HardwareWriteOp(
     val label: String,
     val targetPath: String,
     val value: String,
+    /**
+     * Permissões a pôr no nó depois de escrever: "444" (trancado -- o perf HAL do fabricante não
+     * consegue repor o valor), o modo original (ao voltar a Stock, para devolver o nó ao sistema),
+     * ou `null` para não mexer (ex: `scaling_min_freq`, que o pservice do firmware tem de poder
+     * continuar a escrever).
+     */
+    val lockMode: String? = LOCKED_MODE,
+    /**
+     * `false` para nós que não se leem de volta no mesmo formato (ex: o índice de OPP do GED da
+     * MediaTek): escreve-se só quando o valor pedido muda, sem verificação por leitura.
+     */
+    val verify: Boolean = true,
 ) {
-    val unlockCommand: String get() = "chmod 666 $targetPath"
+    init {
+        // Defesa em profundidade: isto é concatenado num comando root. Hoje só chegam caminhos de
+        // sysfs/proc e números, mas um valor estranho deve falhar alto em vez de ir parar ao shell.
+        require(SAFE_PATH.matches(targetPath)) { "caminho inseguro: $targetPath" }
+        require(SAFE_VALUE.matches(value)) { "valor inseguro: $value" }
+        require(lockMode == null || SAFE_MODE.matches(lockMode)) { "modo inseguro: $lockMode" }
+    }
+
+    /** Só se desbloqueia quando se volta a pôr um modo depois -- nunca deixar um nó a 0666. */
+    val unlockCommand: String? get() = lockMode?.let { "chmod 666 $targetPath" }
     val writeCommand: String get() = "echo $value > $targetPath"
-    val lockCommand: String get() = "chmod 444 $targetPath"
+    val lockCommand: String? get() = lockMode?.let { "chmod $it $targetPath" }
 
     /** Comando único e linear, usado como tentativa rápida quando o backend suporta `sh -c`. */
-    fun asChainedCommand(): String = "$unlockCommand && $writeCommand && $lockCommand"
+    fun asChainedCommand(): String = listOfNotNull(unlockCommand, writeCommand, lockCommand).joinToString(" && ")
 
-    /** Os três passos como comandos independentes, para execução sequencial e resiliente. */
-    fun asSequentialCommands(): List<String> = listOf(unlockCommand, writeCommand, lockCommand)
+    /** Os passos como comandos independentes, para execução sequencial e resiliente. */
+    fun asSequentialCommands(): List<String> = listOfNotNull(unlockCommand, writeCommand, lockCommand)
+
+    companion object {
+        const val LOCKED_MODE = "444"
+
+        /** Modo a repor quando não sabemos o original: o que os init.rc da Qualcomm usam (system:system 0664). */
+        const val DEFAULT_RESTORE_MODE = "664"
+
+        private val SAFE_PATH = Regex("/[A-Za-z0-9_./-]+")
+        private val SAFE_VALUE = Regex("[A-Za-z0-9_. -]+")
+        private val SAFE_MODE = Regex("[0-7]{3,4}")
+    }
+}
+
+/**
+ * Decide se uma escrita "pegou", comparando o pedido com o que o nó tinha ANTES e o que tem
+ * DEPOIS. Estes nós são tetos cujos valores têm de existir na tabela de OPPs: ao pedir um valor
+ * intermédio o driver assenta no OPP mais próximo, e por isso a leitura nem sempre é igual ao
+ * pedido.
+ *
+ *  - igual, ou dentro de ±2% -> aplicado;
+ *  - acima do pedido (> +2%) -> NÃO aplicado (o teto não está em vigor);
+ *  - abaixo do pedido -> só conta se o valor MUDOU. A versão antiga aceitava "qualquer valor
+ *    abaixo", e isso escondia as falhas ao SUBIR um limite (5 W -> Stock): a escrita não fazia
+ *    nada, o valor antigo (mais baixo) passava na verificação e o recuo sequencial nunca corria.
+ */
+fun isWriteApplied(requested: String, before: String?, after: String?): Boolean {
+    if (after == null) return false
+    if (after == requested) return true
+    val r = requested.toLongOrNull() ?: return false
+    val a = after.toLongOrNull() ?: return false
+    if (a > r * 102 / 100) return false
+    if (a >= r * 98 / 100) return true
+    return after != before
 }
 
 /**

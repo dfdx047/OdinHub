@@ -42,7 +42,7 @@ import com.dfdx047.odinhub.ui.theme.getResolvedTheme
 
 /**
  * Editor da regra de UM jogo. Usa exatamente os mesmos modelos que o ecrã principal e o overlay:
- * perfis de TDP de [TdpProfiles] (11 / 12.5 / 15 W / Stock, independentes do slider de 1..25 W) e
+ * perfis de TDP de [TdpProfiles] (watts do aparelho detetado / Stock, independentes do slider) e
  * chips de clock com as frequências REAIS do SoC (as mesmas tabelas do PerformanceManager).
  * Todo o texto existe em EN e PT-BR e segue o idioma escolhido na app.
  */
@@ -54,6 +54,8 @@ fun AppOverridesScreen(
     val uiState by viewModel.uiState.collectAsState()
     val clockTables by viewModel.clockTables.collectAsState()
     val isEn by viewModel.isEnglish.collectAsState()
+    val hasBackButtons by viewModel.hasBackButtons.collectAsState()
+    val soc = remember { com.dfdx047.odinhub.tools.DeviceRegistry.current.soc }
     val haptic = LocalHapticFeedback.current
 
     var expandedLsfgMult by remember { mutableStateOf(false) }
@@ -182,7 +184,7 @@ fun AppOverridesScreen(
                             Spacer(modifier = Modifier.height(6.dp))
                         }
                         ClockChipRow(
-                            title = if (isEn) "Perf Cluster (Cluster 0)" else "Cluster Perf (Cluster 0)",
+                            title = (if (isEn) "Perf Cluster" else "Cluster Perf") + soc.perfCores.takeIf { it.isNotBlank() }?.let { " ($it)" }.orEmpty(),
                             currentMHz = uiState.perfClockMHz,
                             tableMHz = clockTables.perfMHz,
                             enabled = !isTdpMode,
@@ -191,7 +193,7 @@ fun AppOverridesScreen(
                         ) { tap(); viewModel.updateClocks(it.toFloat(), uiState.primeClockMHz, uiState.gpuClockMHz) }
                         Spacer(modifier = Modifier.height(16.dp))
                         ClockChipRow(
-                            title = if (isEn) "Prime Cluster (Cluster 1)" else "Cluster Prime (Cluster 1)",
+                            title = (if (isEn) "Prime Cluster" else "Cluster Prime") + soc.primeCores.takeIf { it.isNotBlank() }?.let { " ($it)" }.orEmpty(),
                             currentMHz = uiState.primeClockMHz,
                             tableMHz = clockTables.primeMHz,
                             enabled = !isTdpMode,
@@ -200,7 +202,7 @@ fun AppOverridesScreen(
                         ) { tap(); viewModel.updateClocks(uiState.perfClockMHz, it.toFloat(), uiState.gpuClockMHz) }
                         Spacer(modifier = Modifier.height(16.dp))
                         ClockChipRow(
-                            title = if (isEn) "GPU (independent)" else "GPU (independente)",
+                            title = soc.gpuName + (if (isEn) " (independent)" else " (independente)"),
                             currentMHz = uiState.gpuClockMHz,
                             tableMHz = clockTables.gpuMHz,
                             enabled = !isTdpMode,
@@ -221,7 +223,7 @@ fun AppOverridesScreen(
                 }
             }
 
-            item {
+            if (viewModel.thermalSupported) item {
                 val thermalLabel: (String) -> String = { mode ->
                     when (mode) {
                         ThermalLimitModes.STOCK -> "Stock"
@@ -264,7 +266,7 @@ fun AppOverridesScreen(
                 }
             }
 
-            item {
+            if (hasBackButtons) item {
                 AppOverrideCard(
                     title = if (isEn) "Back Buttons (M1/M2)" else "Botões Traseiros (M1/M2)",
                     subtitle = if (isEn) "Macros / combos for this game" else "Macros / combos neste jogo",

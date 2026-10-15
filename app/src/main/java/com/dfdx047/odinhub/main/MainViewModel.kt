@@ -14,8 +14,8 @@ import com.dfdx047.odinhub.models.HomeGestureConfig
 import com.dfdx047.odinhub.models.MacroStep
 import com.dfdx047.odinhub.models.TdpProfiles
 import com.dfdx047.odinhub.service.GamingOverlayService
-import com.dfdx047.odinhub.tools.DeviceType
-import com.dfdx047.odinhub.tools.DeviceUtils
+import com.dfdx047.odinhub.tools.DeviceCapabilities
+import com.dfdx047.odinhub.tools.DeviceRegistry
 import com.dfdx047.odinhub.tools.SettingsRepo
 import com.dfdx047.odinhub.tools.ShellExecutor
 import com.dfdx047.odinhub.tools.hardware.DisplayManager
@@ -45,23 +45,10 @@ private const val LIVE_APPLY_DEBOUNCE_MS = 70L
 /** Intervalo mínimo entre avisos repetidos sobre o MESMO nó de hardware. */
 private const val HARDWARE_ERROR_COOLDOWN_MS = 5 * 60 * 1000L
 
-/**
- * Aparelhos em que o mecanismo de controlo desta app (PServerBinder + sysfs) é conhecido por
- * funcionar. Fora desta lista mostramos o aviso de incompatibilidade -- mas o Odin 3, que é o
- * alvo do projeto, obviamente entra.
- */
-private val SUPPORTED_DEVICES = setOf(
-    DeviceType.ODIN3,
-    DeviceType.ODIN2,
-    DeviceType.ODIN2_MINI,
-    DeviceType.ODIN_PORTAL,
-    DeviceType.AYN_THOR,
-)
-
 @HiltViewModel
 class MainViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
-    private val deviceUtils: DeviceUtils,
+    private val deviceCapabilities: DeviceCapabilities,
     private val executor: ShellExecutor,
     private val settings: SettingsRepo,
     private val buttonActions: com.dfdx047.odinhub.tools.ButtonActionHandler,
@@ -87,24 +74,21 @@ class MainViewModel @Inject constructor(
     private val hardwareErrorLastShown = mutableMapOf<String, Long>()
 
     init {
-        val deviceType = deviceUtils.getDeviceType()
+        // Deteção sem I/O root (Build + system properties): seguro na thread principal. A versão
+        // anterior fazia dois `getprop` pelo PServer aqui, bloqueando o primeiro fotograma.
+        val device = DeviceRegistry.current
 
         _uiState.update {
             MainUiModel(
-                deviceType = deviceType,
-                deviceVersion = deviceUtils.getDeviceVersion(),
-                // O Odin Hub é feito para o Odin 3, mas o mesmo mecanismo (PServerBinder + sysfs)
-                // funciona na família Odin. Antes a condição era `deviceType != ODIN2`, ou seja,
-                // o próprio Odin 3 -- o aparelho alvo deste projeto -- era marcado como
-                // "incompatível" e recebia o aviso.
-                showIncompatibleDeviceDialog = deviceType !in SUPPORTED_DEVICES,
+                device = device,
+                deviceVersion = DeviceRegistry.firmwareVersion,
+                hasBackButtons = deviceCapabilities.backButtons.value,
                 showPServerNotAvailableDialog = !executor.pServerAvailable,
                 homeGestures = prefs.homeGestureConfig,
                 m1MacroEnabled = prefs.macroEnabled("m1"),
                 m1MacroSteps = ButtonMacros.decode(prefs.macroSteps("m1")),
                 m2MacroEnabled = prefs.macroEnabled("m2"),
                 m2MacroSteps = ButtonMacros.decode(prefs.macroSteps("m2")),
-                appOverridesEnabled = prefs.appOverridesEnabled,
 
                 selectedThemeIndex = prefs.selectedThemeIndex,
                 useAmoledBlack = prefs.useAmoledBlack,
@@ -139,12 +123,12 @@ class MainViewModel @Inject constructor(
 
                 reshadeProfile = prefs.reshadeProfile,
                 showFpsOverlay = prefs.showFpsOverlay,
-                isDllImported = losslessManager.isDllImported,
+                // Só com o motor gráfico ativo (I/O de disco à toa na thread principal, senão).
+                isDllImported = com.dfdx047.odinhub.models.FeatureFlags.GRAPHICS_ENGINE_AVAILABLE && losslessManager.isDllImported,
 
                 overlayEnabled = prefs.overlayEnabled,
                 overlayHandleOpacity = prefs.overlayHandleOpacity,
                 overlayHandleWidth = prefs.overlayHandleWidth,
-                overlayPanelOpacity = prefs.overlayPanelOpacity,
 
                 bgmEnabled = prefs.bgmEnabled,
                 bgmVolume = prefs.bgmVolume,
@@ -219,6 +203,31 @@ class MainViewModel @Inject constructor(
                 _uiState.update { it.copy(thermalStatus = status) }
             }
         }
+        viewModelScope.launch {
+            performanceManager.autoTdpStatus.collect { telemetry ->
+                _uiState.update { it.copy(autoTdp = telemetry) }
+            }
+        }
+        viewModelScope.launch {
+            deviceCapabilities.backButtons.collect { has -> _uiState.update { it.copy(hasBackButtons = has) } }
+        }
+        // Presets guardados no overlay aparecem aqui sem reiniciar a app.
+        viewModelScope.launch {
+            prefs.customProfilesFlow.collect { list -> _uiState.update { it.copy(customProfiles = list) } }
+        }
+
+        // "AYN Odin 2 detetado": uma vez por aparelho (ou ao trocar de aparelho com backup restaurado).
+        if (prefs.lastDetectedDeviceId != device.id + ":" + device.name) {
+            prefs.lastDetectedDeviceId = device.id + ":" + device.name
+            val message = if (device.official) {
+                if (prefs.isEnglish) "${device.name} detected — frequency tables, thermal zones and TDP profiles adjusted"
+                else "${device.name} detectado — tabelas de frequência, zonas térmicas e perfis de TDP ajustados"
+            } else {
+                if (prefs.isEnglish) "${device.name} (${device.soc.label}): no dedicated profile — using the kernel's live tables"
+                else "${device.name} (${device.soc.label}): sem perfil próprio — usando as tabelas do kernel"
+            }
+            _hardwareErrorEvents.trySend(message)
+        }
     }
 
     fun importLosslessDll(uri: Uri): Boolean {
@@ -227,7 +236,6 @@ class MainViewModel @Inject constructor(
         return success
     }
 
-    fun updateOverlayPanelOpacity(opacity: Float) { prefs.overlayPanelOpacity = opacity; _uiState.update { it.copy(overlayPanelOpacity = opacity) } }
     fun updateFanMode(mode: Int) { prefs.fanMode = mode; _uiState.update { it.copy(fanMode = mode) }; viewModelScope.launch(Dispatchers.IO) { performanceManager.applyFanMode(FanMode.fromSettingsValue(mode)) } }
     /**
      * CAUSA RAIZ do "mexo no Settings e nada fica": esta função só mudava o `_uiState`. O modo
@@ -239,7 +247,11 @@ class MainViewModel @Inject constructor(
     fun updateLimitMode(mode: String) {
         prefs.activeLimitMode = mode
         _uiState.update { it.copy(activeLimitMode = mode) }
-        viewModelScope.launch(Dispatchers.IO) {
+        // Uma escrita de slider ainda pendente (janela de debounce) do OUTRO modo não pode chegar
+        // ao hardware depois desta troca -- senão o aparelho ficava em TDP com a UI em Clocks.
+        tdpJob?.cancel()
+        clockJob?.cancel()
+        clockJob = viewModelScope.launch(Dispatchers.IO) {
             val current = _uiState.value
             if (mode == "TDP") {
                 // O perfil de TDP é o "mestre": Stock = sem limite, perfil fixo = os seus watts,
@@ -288,7 +300,7 @@ class MainViewModel @Inject constructor(
         tdpJob?.cancel()
         tdpJob = viewModelScope.launch(Dispatchers.IO) {
             delay(LIVE_APPLY_DEBOUNCE_MS)
-            performanceManager.applyDynamicTdp(clamped)
+            if (prefs.activeLimitMode == "TDP") performanceManager.applyDynamicTdp(clamped)
         }
     }
 
@@ -304,7 +316,7 @@ class MainViewModel @Inject constructor(
         _uiState.update { it.copy(tdpProfileId = profile.id, tdpValue = profile.watts ?: it.tdpValue) }
         tdpJob?.cancel()
         tdpJob = viewModelScope.launch(Dispatchers.IO) {
-            performanceManager.applyTdpSelection(profile.watts)
+            if (prefs.activeLimitMode == "TDP") performanceManager.applyTdpSelection(profile.watts)
         }
     }
 
@@ -325,13 +337,15 @@ class MainViewModel @Inject constructor(
         clockJob?.cancel()
         clockJob = viewModelScope.launch(Dispatchers.IO) {
             delay(LIVE_APPLY_DEBOUNCE_MS)
-            performanceManager.applyAbsoluteClocks((perfClock * 1000).toLong(), (primeClock * 1000).toLong(), (gpuClock * 1000000).toLong())
+            if (prefs.activeLimitMode != "TDP") {
+                performanceManager.applyAbsoluteClocks((perfClock * 1000).toLong(), (primeClock * 1000).toLong(), (gpuClock * 1000000).toLong())
+            }
         }
     }
 
     fun saveCustomProfile(name: String, type: String, val1: Float, val2: Float, val3: Float, val4: Float) {
+        // O customProfilesFlow (coletado no init) atualiza a lista.
         prefs.saveCustomProfile(name, type, val1, val2, val3, val4)
-        _uiState.update { it.copy(customProfiles = prefs.getAllCustomProfiles()) }
     }
 
     // Limite térmico (root) -- ver ThermalManager. As escritas correm no scope do próprio
@@ -352,6 +366,32 @@ class MainViewModel @Inject constructor(
     /** Idioma da UI, persistido e partilhado com overlay/editor por app (ver SharedPrefsRepo.isEnglish). */
     val isEnglish: StateFlow<Boolean> get() = prefs.isEnglishFlow
     fun setLanguage(english: Boolean) { prefs.isEnglish = english }
+
+    /** Definições do fundo, persistidas (ver SharedPrefsRepo.wallpaper*). */
+    data class WallpaperSettings(
+        val type: String,
+        val blur: Boolean,
+        val blurIntensity: Float,
+        val opacity: Float,
+        val staticIndex: Int,
+        val customUri: String?,
+        val name: String?,
+    )
+
+    fun wallpaperSettings() = WallpaperSettings(
+        prefs.wallpaperType, prefs.wallpaperBlur, prefs.wallpaperBlurIntensity, prefs.wallpaperOpacity,
+        prefs.wallpaperStatic, prefs.wallpaperCustomUri, prefs.wallpaperName,
+    )
+
+    fun saveWallpaperSettings(w: WallpaperSettings) {
+        prefs.wallpaperType = w.type
+        prefs.wallpaperBlur = w.blur
+        prefs.wallpaperBlurIntensity = w.blurIntensity
+        prefs.wallpaperOpacity = w.opacity
+        prefs.wallpaperStatic = w.staticIndex
+        prefs.wallpaperCustomUri = w.customUri
+        prefs.wallpaperName = w.name
+    }
 
     fun updateThemeIndex(newIndex: Int) { prefs.selectedThemeIndex = newIndex; _uiState.update { it.copy(selectedThemeIndex = newIndex) } }
     fun updateAmoledBlack(enabled: Boolean) { prefs.useAmoledBlack = enabled; _uiState.update { it.copy(useAmoledBlack = enabled) } }
@@ -410,7 +450,6 @@ class MainViewModel @Inject constructor(
             displayManager.resetDisplayColor()
         }
     }
-    fun incompatibleDeviceDialogDismissed() { _uiState.update { it.copy(showIncompatibleDeviceDialog = false) } }
     fun pServerDialogDismissed() { _uiState.update { it.copy(showPServerNotAvailableDialog = false) } }
 
     fun showOverlayShortcutDialog() { _uiState.update { it.copy(showOverlayShortcutDialog = true) } }
@@ -449,10 +488,11 @@ class MainViewModel @Inject constructor(
     fun remapButtonClicked(setting: String) {
         // Abre o diálogo já, e preenche o código atual quando a leitura root responder -- antes
         // esta leitura acontecia dentro do onClick e segurava a UI até o binder devolver.
-        _uiState.update { it.copy(showRemapButtonDialog = true, currentButtonSetting = setting) }
+        // -1 = "a ler": o diálogo não pode mostrar (nem gravar) o código do botão ANTERIOR.
+        _uiState.update { it.copy(showRemapButtonDialog = true, currentButtonSetting = setting, currentButtonKeyCode = -1) }
         viewModelScope.launch(Dispatchers.IO) {
-            val keyCode = executor.getIntSystemSetting(setting, 0)
-            _uiState.update { it.copy(currentButtonKeyCode = keyCode) }
+            val keyCode = executor.getIntSystemSettingOrNull(setting) ?: 0
+            _uiState.update { if (it.currentButtonSetting == setting) it.copy(currentButtonKeyCode = keyCode) else it }
         }
     }
 
@@ -472,6 +512,8 @@ class MainViewModel @Inject constructor(
             prefs.saveMacro(button, false, prefs.macroSteps(button).orEmpty())
             _uiState.update { if (button == "m1") it.copy(m1MacroEnabled = false) else it.copy(m2MacroEnabled = false) }
         }
-        viewModelScope.launch(Dispatchers.IO) { executor.setIntSystemSetting(setting, newValue) }
+        // Pelo ButtonActionHandler (sincronizado com o syncTriggers), para uma troca de app a meio
+        // não repor o mapeamento antigo por cima do que acabou de ser escolhido.
+        viewModelScope.launch(Dispatchers.IO) { buttonActions.setNativeMapping(setting, newValue) }
     }
 }

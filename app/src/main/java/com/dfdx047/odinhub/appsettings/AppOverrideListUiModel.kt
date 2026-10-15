@@ -3,7 +3,6 @@ package com.dfdx047.odinhub.appsettings
 import android.graphics.drawable.Drawable
 
 data class AppOverrideListUiModel(
-    val deviceVersion: String = "",
     val showAppSelectDialog: Boolean = false,
     val overrideList: List<AppUiModel> = emptyList(),
     val overrideCandidates: List<AppUiModel> = emptyList(),
@@ -12,16 +11,6 @@ data class AppOverrideListUiModel(
     // temas -- por isso parecia um ecrã de outra aplicação.
     val selectedThemeIndex: Int = 0,
     val useAmoledBlack: Boolean = false,
-)
-
-data class AppOverridesUiModel(
-    val deviceVersion: String = "",
-    val app: AppUiModel? = null,
-    val hasUnsavedChanges: Boolean = false,
-    val showDeleteConfirmDialog: Boolean = false,
-    val navigateBack: Boolean = false,
-    val isNewApp: Boolean = false,
-    val disabledFanModeKeys: List<String> = emptyList(),
 )
 
 data class AppUiModel(

@@ -5,8 +5,9 @@ import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import com.dfdx047.odinhub.data.AppOverrideDao
 import com.dfdx047.odinhub.data.SharedPrefsRepo
-import com.dfdx047.odinhub.tools.DeviceUtils
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -19,7 +20,6 @@ import javax.inject.Inject
 class AppOverrideListViewModel @Inject constructor(
     private val appOverrideDao: AppOverrideDao,
     private val appOverrideMapper: AppOverrideMapper,
-    private val deviceUtils: DeviceUtils,
     private val prefs: SharedPrefsRepo,
 ) : ViewModel() {
     /** Idioma da UI partilhado com o resto da app (SharedPrefsRepo.isEnglish). */
@@ -39,18 +39,23 @@ class AppOverrideListViewModel @Inject constructor(
             it.copy(selectedThemeIndex = prefs.selectedThemeIndex, useAmoledBlack = prefs.useAmoledBlack)
         }
 
+        // Todo o trabalho pesado (PackageManager: lista de apps, ícones, nomes) DENTRO do flow, antes
+        // do flowOn(IO). Antes o `flowOn` só movia a query do Room e o mapeamento corria no
+        // `collect`, na thread principal -- a cada emissão do Room (incluindo cada escrita do
+        // overlay). O `getprop` root da versão do firmware, que ninguém mostrava, saiu.
         viewModelScope.launch {
-            appOverrideDao.getAll()
+            combine(appOverrideDao.getAll(), prefs.isEnglishFlow) { overrides, isEn -> overrides to isEn }
+                .map { (overrides, isEn) ->
+                    Triple(
+                        overrides.map { it.packageName },
+                        appOverrideMapper.mapAppOverrides(overrides, isEn),
+                        appOverrideMapper.mapOverrideCandidates(overrides),
+                    )
+                }
                 .flowOn(Dispatchers.IO)
-                .collect { overrides ->
-                    existingOverrides = overrides.map { it.packageName }
-                    _uiState.update {
-                        it.copy(
-                            overrideList = appOverrideMapper.mapAppOverrides(overrides),
-                            overrideCandidates = appOverrideMapper.mapOverrideCandidates(overrides),
-                            deviceVersion = deviceUtils.getDeviceVersion(),
-                        )
-                    }
+                .collect { (packages, list, candidates) ->
+                    existingOverrides = packages
+                    _uiState.update { it.copy(overrideList = list, overrideCandidates = candidates) }
                 }
         }
     }

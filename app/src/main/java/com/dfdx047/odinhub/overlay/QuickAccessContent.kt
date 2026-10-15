@@ -38,6 +38,7 @@ import com.dfdx047.odinhub.models.ButtonMacros
 import com.dfdx047.odinhub.models.MacroMode
 import com.dfdx047.odinhub.models.MacroStep
 import com.dfdx047.odinhub.ui.screens.MacroModeChips
+import com.dfdx047.odinhub.ui.screens.autoTdpLine
 import com.dfdx047.odinhub.ui.screens.MacroStepsEditor
 import com.dfdx047.odinhub.tools.hardware.DisplayManager
 import com.dfdx047.odinhub.tools.hardware.PerformanceManager
@@ -188,22 +189,14 @@ private fun QuickAccessPanel(
     // na escrita não a interrompe. Com uma janela de espera à frente, o job anterior é cancelado
     // ainda dentro do `delay` e nunca chega a escrever -- só o último valor do arrasto vai ao
     // root, em vez de dezenas de escritas concorrentes a competir na mesma fila.
-    var tdpJob by remember { mutableStateOf<Job?>(null) }
-    var clockJob by remember { mutableStateOf<Job?>(null) }
-    fun applyTdpLive(watts: Float) {
-        tdpJob?.cancel()
-        tdpJob = scope.launch(Dispatchers.IO) {
-            delay(LIVE_APPLY_DEBOUNCE_MS)
-            performanceManager.applyDynamicTdp(watts)
-        }
-    }
-    fun applyClocksLive(perfMHz: Float, primeMHz: Float, gpuMHz: Float) {
-        clockJob?.cancel()
-        clockJob = scope.launch(Dispatchers.IO) {
-            delay(LIVE_APPLY_DEBOUNCE_MS)
-            performanceManager.applyAbsoluteClocks((perfMHz * 1000).toLong(), (primeMHz * 1000).toLong(), (gpuMHz * 1_000_000).toLong())
-        }
-    }
+    //
+    // ATUALIZAÇÃO: o PerformanceManager passou a ter um único daemon que escreve em sysfs; os
+    // `apply*` só mudam o alvo e acordam-no (não bloqueiam). Por isso chamam-se diretamente --
+    // sem coroutine do painel, que era cancelada se o painel fechasse dentro da janela de espera
+    // e deixava o hardware num valor diferente do que a UI mostrava.
+    fun applyTdpLive(watts: Float) = performanceManager.applyDynamicTdp(watts)
+    fun applyClocksLive(perfMHz: Float, primeMHz: Float, gpuMHz: Float) =
+        performanceManager.applyAbsoluteClocks((perfMHz * 1000).toLong(), (primeMHz * 1000).toLong(), (gpuMHz * 1_000_000).toLong())
 
     // CAUSA RAIZ (auditoria): tudo aqui era lido/escrito só no SharedPrefs (`prefs.getPerApp*`
     // / `prefs.savePerAppConfig`), um armazenamento TOTALMENTE separado da tabela Room que a
@@ -224,8 +217,18 @@ private fun QuickAccessPanel(
 
     // Separadores: ids estáveis (e não índices) para poder esconder os de gráficos quando o motor
     // não está disponível (FeatureFlags.GRAPHICS_ENGINE_AVAILABLE) sem baralhar os restantes.
-    val tabIds = if (FeatureFlags.GRAPHICS_ENGINE_AVAILABLE) listOf(TAB_PERFORMANCE, TAB_DISPLAY, TAB_BUTTONS, TAB_VISUALS, TAB_UPSCALING) else listOf(TAB_PERFORMANCE, TAB_DISPLAY, TAB_BUTTONS, TAB_VISUALS)
-    var selectedTab by remember { mutableIntStateOf(tabIds.first()) }
+    // O separador dos botões só existe em aparelhos com M1/M2 remapeáveis (ver DeviceCapabilities).
+    val hasBackButtons by buttonActions.backButtons.collectAsState()
+    val tabIds = buildList {
+        add(TAB_PERFORMANCE)
+        add(TAB_DISPLAY)
+        if (hasBackButtons) add(TAB_BUTTONS)
+        add(TAB_VISUALS)
+        if (FeatureFlags.GRAPHICS_ENGINE_AVAILABLE) add(TAB_UPSCALING)
+    }
+    var chosenTab by remember { mutableIntStateOf(tabIds.first()) }
+    // Se o separador escolhido deixar de existir (ex: botões M1/M2), mostra o primeiro.
+    val selectedTab = if (chosenTab in tabIds) chosenTab else tabIds.first()
 
     var reshadeProfile by remember(currentApp) { mutableStateOf(existingOverride?.reshadeProfile ?: prefs.reshadeProfile) }
 
@@ -256,6 +259,11 @@ private fun QuickAccessPanel(
     }
     // Tabelas reais de frequências do SoC, lidas diretamente do PerformanceManager partilhado.
     val clockTables by performanceManager.clockTables.collectAsState()
+    val autoTdp by performanceManager.autoTdpStatus.collectAsState()
+    val thermalSupported = thermalManager.status.collectAsState().value.supported
+    val soc = remember { com.dfdx047.odinhub.tools.DeviceRegistry.current.soc }
+    // Presets reativos (antes: prefs.all copiado a cada recomposição -- cada frame de um arrasto).
+    val customProfiles by prefs.customProfilesFlow.collectAsState()
     var cpuPerfClock by remember(currentApp) { mutableFloatStateOf(existingOverride?.perfClockKHz?.let { it / 1000f } ?: prefs.cpuPerfClock) }
     var cpuPrimeClock by remember(currentApp) { mutableFloatStateOf(existingOverride?.primeClockKHz?.let { it / 1000f } ?: prefs.cpuPrimeClock) }
     var gpuClock by remember(currentApp) { mutableFloatStateOf(existingOverride?.gpuClockHz?.let { it / 1_000_000f } ?: prefs.gpuClock) }
@@ -311,7 +319,21 @@ private fun QuickAccessPanel(
         // numa linha "global" que nenhum ecrã mostrava. Se o painel for aberto fora de um app (o
         // que já não deve acontecer, porque a barrinha fica escondida), as alterações continuam a
         // valer para a sessão atual, mas não inventamos uma regra por app.
-        if (currentApp.isBlank() || currentApp == ForegroundAppTracker.GLOBAL) return
+        if (currentApp.isBlank()) return
+        if (currentApp == ForegroundAppTracker.GLOBAL) {
+            // Modo degradado (sem acessibilidade nem estatísticas de uso): o painel diz "Perfil
+            // global", por isso as alterações vão para o perfil GLOBAL -- antes chegavam ao
+            // hardware mas não ficavam guardadas em lado nenhum, e a troca de app seguinte
+            // repunha os valores antigos.
+            prefs.activeLimitMode = activeLimitMode
+            prefs.tdpProfileId = tdpProfileId
+            prefs.tdpValue = tdpValue
+            prefs.cpuPerfClock = cpuPerfClock
+            prefs.cpuPrimeClock = cpuPrimeClock
+            prefs.gpuClock = gpuClock
+            prefs.fanMode = fanMode
+            return
+        }
 
         val isTdpMode = activeLimitMode == "TDP"
         // Stock (sem limite) fica guardado como a sentinela de TdpProfiles, porque `null` neste
@@ -401,7 +423,7 @@ private fun QuickAccessPanel(
                     else -> "Performance"
                 }
                 val isSelected = selectedTab == tabId
-                Box(modifier = Modifier.weight(1f).clip(RoundedCornerShape(6.dp)).background(if (isSelected) theme.primary else Color.Transparent).clickable { selectedTab = tabId }.padding(vertical = 8.dp), contentAlignment = Alignment.Center) {
+                Box(modifier = Modifier.weight(1f).clip(RoundedCornerShape(6.dp)).background(if (isSelected) theme.primary else Color.Transparent).clickable { chosenTab = tabId }.padding(vertical = 8.dp), contentAlignment = Alignment.Center) {
                     Text(title, color = if (isSelected) theme.onPrimary else theme.text.copy(alpha = 0.6f), fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 }
             }
@@ -455,7 +477,7 @@ private fun QuickAccessPanel(
                     Slider(value = temperature, enabled = displayOverride, onValueChange = { temperature = it; applyColorLive() }, onValueChangeFinished = { persistOverride() }, valueRange = 4000f..9000f, colors = SliderDefaults.colors(thumbColor = theme.primary, activeTrackColor = theme.primary))
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                         Text(if (isEn) "Warmer ← 6500K → Cooler" else "Quente ← 6500K → Frio", color = theme.text.copy(alpha = 0.5f), fontSize = 10.sp)
-                        Text("RESET", color = theme.primary, fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.clickable(enabled = displayOverride) { saturation = 1f; temperature = 6500f; applyColorLive(); persistOverride() }.padding(4.dp))
+                        Text(if (isEn) "RESET" else "REDEFINIR", color = theme.primary, fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.clickable(enabled = displayOverride) { saturation = 1f; temperature = 6500f; applyColorLive(); persistOverride() }.padding(4.dp))
                     }
                 }
             }
@@ -477,8 +499,13 @@ private fun QuickAccessPanel(
                 Column(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(theme.surface.copy(alpha = 0.5f)).padding(12.dp)) {
                     MacroModeChips(mode = mode, theme = theme, isEn = isEn) { newMode ->
                         if (isM1) { m1Mode = newMode } else { m2Mode = newMode }
-                        persistOverride()
-                        applyMacrosLive()
+                        // "Própria" sem passos ainda não é uma macro: grava-se quando o primeiro
+                        // passo for adicionado (MacroStepsEditor.onChanged). Gravar já guardava ""
+                        // e o chip voltava como "Desligada" ao reabrir o painel.
+                        if (newMode != MacroMode.CUSTOM || steps.isNotEmpty()) {
+                            persistOverride()
+                            applyMacrosLive()
+                        }
                     }
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
@@ -562,8 +589,8 @@ private fun QuickAccessPanel(
                     // novo a cada toque: essa combinação fazia com que o modo escolhido aqui
                     // fosse reinterpretado como outro (ou como "Stock") assim que o serviço de
                     // acessibilidade reaplicava os perfis ao trocar de app.
-                    for (mode in FanMode.selectable) {
-                        val isSel = fanMode == mode.settingsValue
+                    for (mode in FanMode.selectable + FanMode.Stock) {
+                        val isSel = if (mode == FanMode.Stock) FanMode.selectable.none { it.settingsValue == fanMode } else fanMode == mode.settingsValue
                         Box(modifier = Modifier.weight(1f).clip(RoundedCornerShape(6.dp)).background(if (isSel) theme.primary else Color.Transparent).clickable { fanMode = mode.settingsValue; scope.launch(Dispatchers.IO) { performanceManager.applyFanMode(mode) }; persistOverride() }.padding(vertical = 8.dp), contentAlignment = Alignment.Center) {
                             Text(mode.shortLabel, color = if (isSel) theme.onPrimary else theme.text.copy(alpha = 0.6f), fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         }
@@ -573,7 +600,12 @@ private fun QuickAccessPanel(
                 Spacer(modifier = Modifier.height(16.dp))
                 Text(if (isEn) "THERMAL LIMIT" else "LIMITE TÉRMICO", color = theme.text.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
                 Spacer(modifier = Modifier.height(8.dp))
-                Row(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(theme.surface.copy(alpha = 0.5f)).padding(4.dp), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                if (!thermalSupported) {
+                    Text(
+                        if (isEn) "Not available on this device (MediaTek)" else "Indisponível neste aparelho (MediaTek)",
+                        color = theme.text.copy(alpha = 0.5f), fontSize = 10.sp,
+                    )
+                } else Row(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(theme.surface.copy(alpha = 0.5f)).padding(4.dp), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                     val options: List<String?> = listOf(null) + ThermalLimitModes.all
                     for (option in options) {
                         val isSel = thermalMode == option
@@ -610,8 +642,8 @@ private fun QuickAccessPanel(
                 Text(if (isEn) "LIMIT MODE" else "MODO DE LIMITAÇÃO", color = theme.text.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
                 Spacer(modifier = Modifier.height(8.dp))
                 Row(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(theme.scrim).border(1.dp, theme.text.copy(alpha = 0.1f), RoundedCornerShape(8.dp)).padding(4.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Box(modifier = Modifier.weight(1f).clip(RoundedCornerShape(6.dp)).background(if (activeLimitMode == "TDP") theme.primary else Color.Transparent).clickable { activeLimitMode = "TDP"; scope.launch(Dispatchers.IO) { performanceManager.applyTdpSelection(TdpProfiles.resolveWatts(tdpProfileId, tdpValue)) }; persistOverride() }.padding(vertical = 10.dp), contentAlignment = Alignment.Center) { Text("TDP", color = if (activeLimitMode == "TDP") theme.onPrimary else theme.text.copy(alpha = 0.6f), fontSize = 11.sp, fontWeight = FontWeight.Bold) }
-                    Box(modifier = Modifier.weight(1f).clip(RoundedCornerShape(6.dp)).background(if (activeLimitMode == "CLOCK") theme.primary else Color.Transparent).clickable { activeLimitMode = "CLOCK"; scope.launch(Dispatchers.IO) { performanceManager.applyAbsoluteClocks((cpuPerfClock * 1000).toLong(), (cpuPrimeClock * 1000).toLong(), (gpuClock * 1000000).toLong()) }; persistOverride() }.padding(vertical = 10.dp), contentAlignment = Alignment.Center) { Text("Clocks", color = if (activeLimitMode == "CLOCK") theme.onPrimary else theme.text.copy(alpha = 0.6f), fontSize = 11.sp, fontWeight = FontWeight.Bold) }
+                    Box(modifier = Modifier.weight(1f).clip(RoundedCornerShape(6.dp)).background(if (activeLimitMode == "TDP") theme.primary else Color.Transparent).clickable { activeLimitMode = "TDP"; performanceManager.applyTdpSelection(TdpProfiles.resolveWatts(tdpProfileId, tdpValue)); persistOverride() }.padding(vertical = 10.dp), contentAlignment = Alignment.Center) { Text("TDP", color = if (activeLimitMode == "TDP") theme.onPrimary else theme.text.copy(alpha = 0.6f), fontSize = 11.sp, fontWeight = FontWeight.Bold) }
+                    Box(modifier = Modifier.weight(1f).clip(RoundedCornerShape(6.dp)).background(if (activeLimitMode == "CLOCK") theme.primary else Color.Transparent).clickable { activeLimitMode = "CLOCK"; applyClocksLive(cpuPerfClock, cpuPrimeClock, gpuClock); persistOverride() }.padding(vertical = 10.dp), contentAlignment = Alignment.Center) { Text("Clocks", color = if (activeLimitMode == "CLOCK") theme.onPrimary else theme.text.copy(alpha = 0.6f), fontSize = 11.sp, fontWeight = FontWeight.Bold) }
                 }
 
                 Spacer(modifier = Modifier.height(14.dp))
@@ -628,8 +660,7 @@ private fun QuickAccessPanel(
                             Box(modifier = Modifier.weight(1f).clip(RoundedCornerShape(6.dp)).background(if (isSel) theme.primary else theme.surface.copy(alpha = 0.5f)).clickable {
                                 tdpProfileId = profile.id
                                 profile.watts?.let { tdpValue = it }
-                                tdpJob?.cancel()
-                                scope.launch(Dispatchers.IO) { performanceManager.applyTdpSelection(profile.watts) }
+                                performanceManager.applyTdpSelection(profile.watts)
                                 persistOverride()
                             }.padding(vertical = 8.dp), contentAlignment = Alignment.Center) { Text(profile.label(isEn), color = if (isSel) theme.onPrimary else theme.text, fontSize = 10.sp, fontWeight = FontWeight.Bold) }
                         }
@@ -637,13 +668,13 @@ private fun QuickAccessPanel(
                     TdpProfiles.byId(tdpProfileId)?.let { selected ->
                         Text(selected.watts?.let { "${TdpProfiles.formatWatts(it)} -- ${selected.description(isEn)}" } ?: selected.description(isEn), color = theme.text.copy(alpha = 0.6f), fontSize = 10.sp, modifier = Modifier.padding(top = 4.dp))
                     }
-                    val userTdpProfiles = prefs.getAllCustomProfiles().filter { it.type == "TDP" }
+                    val userTdpProfiles = customProfiles.filter { it.type == "TDP" }
                     if (userTdpProfiles.isNotEmpty()) {
                         Spacer(modifier = Modifier.height(8.dp))
                         Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                             for (prof in userTdpProfiles) {
                                 val isSel = tdpProfileId == TdpProfiles.ID_CUSTOM && tdpValue == prof.v1
-                                Box(modifier = Modifier.clip(RoundedCornerShape(6.dp)).background(if (isSel) theme.primary else theme.surface.copy(alpha = 0.5f)).clickable { tdpProfileId = TdpProfiles.ID_CUSTOM; tdpValue = prof.v1; scope.launch(Dispatchers.IO) { performanceManager.applyDynamicTdp(prof.v1) }; persistOverride() }.padding(horizontal = 12.dp, vertical = 8.dp), contentAlignment = Alignment.Center) {
+                                Box(modifier = Modifier.clip(RoundedCornerShape(6.dp)).background(if (isSel) theme.primary else theme.surface.copy(alpha = 0.5f)).clickable { tdpProfileId = TdpProfiles.ID_CUSTOM; tdpValue = prof.v1; performanceManager.applyDynamicTdp(prof.v1); persistOverride() }.padding(horizontal = 12.dp, vertical = 8.dp), contentAlignment = Alignment.Center) {
                                     Text("${prof.name} (${TdpProfiles.formatWatts(prof.v1)})", color = if (isSel) theme.onPrimary else theme.text, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                                 }
                             }
@@ -659,6 +690,9 @@ private fun QuickAccessPanel(
                             valueRange = TdpProfiles.TDP_MIN_WATTS..TdpProfiles.TDP_MAX_WATTS,
                             colors = SliderDefaults.colors(thumbColor = theme.primary, activeTrackColor = theme.primary),
                         )
+                        autoTdpLine(autoTdp, isEn)?.let { line ->
+                            Text(line, color = theme.primary.copy(alpha = 0.85f), fontSize = 10.sp)
+                        }
                     }
                     Spacer(modifier = Modifier.height(12.dp))
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -671,7 +705,7 @@ private fun QuickAccessPanel(
                     // Sem perfis combinados de clocks: os únicos perfis que existem são os de
                     // TDP. Aqui só há os presets guardados pelo utilizador e os chips numéricos
                     // com as frequências REAIS do SoC (tabela do kernel via PerformanceManager).
-                    val userClockProfiles = prefs.getAllCustomProfiles().filter { it.type == "CLOCK" }
+                    val userClockProfiles = customProfiles.filter { it.type == "CLOCK" }
                     if (userClockProfiles.isNotEmpty()) {
                         Spacer(modifier = Modifier.height(8.dp))
                         Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -689,7 +723,7 @@ private fun QuickAccessPanel(
                         // chip é um valor que o hardware suporta mesmo. Mesmo componente do ecrã
                         // de Settings (ClockChipRow), com subconjunto curado + "Todos".
                         ClockChipRow(
-                            title = if (isEn) "Perf Cluster (Cluster 0)" else "Cluster Perf (Cluster 0)",
+                            title = (if (isEn) "Perf Cluster" else "Cluster Perf") + soc.perfCores.takeIf { it.isNotBlank() }?.let { " ($it)" }.orEmpty(),
                             currentMHz = cpuPerfClock,
                             tableMHz = clockTables.perfMHz,
                             enabled = true,
@@ -698,7 +732,7 @@ private fun QuickAccessPanel(
                         ) { mhz -> cpuPerfClock = mhz.toFloat(); applyClocksLive(cpuPerfClock, cpuPrimeClock, gpuClock); persistOverride() }
                         Spacer(modifier = Modifier.height(12.dp))
                         ClockChipRow(
-                            title = if (isEn) "Prime Cluster (Cluster 1)" else "Cluster Prime (Cluster 1)",
+                            title = (if (isEn) "Prime Cluster" else "Cluster Prime") + soc.primeCores.takeIf { it.isNotBlank() }?.let { " ($it)" }.orEmpty(),
                             currentMHz = cpuPrimeClock,
                             tableMHz = clockTables.primeMHz,
                             enabled = true,
@@ -707,7 +741,7 @@ private fun QuickAccessPanel(
                         ) { mhz -> cpuPrimeClock = mhz.toFloat(); applyClocksLive(cpuPerfClock, cpuPrimeClock, gpuClock); persistOverride() }
                         Spacer(modifier = Modifier.height(12.dp))
                         ClockChipRow(
-                            title = if (isEn) "Adreno GPU (independent)" else "Adreno GPU (independente)",
+                            title = soc.gpuName + (if (isEn) " (independent)" else " (independente)"),
                             currentMHz = gpuClock,
                             tableMHz = clockTables.gpuMHz,
                             enabled = true,

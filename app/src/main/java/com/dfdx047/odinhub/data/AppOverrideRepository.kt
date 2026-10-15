@@ -3,12 +3,16 @@ package com.dfdx047.odinhub.data
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -38,13 +42,26 @@ class AppOverrideRepository @Inject constructor(
 ) {
     private val repositoryScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    private val loaded = MutableStateFlow(false)
+
     val overridesByPackage: StateFlow<Map<String, AppOverrideEntity>> =
         dao.getAll()
             .map { list -> list.associateBy { it.packageName } }
+            .onEach { loaded.value = true }
             .stateIn(repositoryScope, SharingStarted.Eagerly, emptyMap())
 
     /** Leitura síncrona e não-bloqueante a partir do cache em memória (sempre atualizado pelo Flow do Room). */
     fun get(packageName: String): AppOverrideEntity? = overridesByPackage.value[packageName]
+
+    /**
+     * Como [get], mas espera (até [timeoutMs]) que o Room entregue a primeira leitura. Num
+     * processo acabado de arrancar o cache ainda está vazio: o watcher lia "sem regra" e aplicava
+     * o perfil GLOBAL ao jogo em vez da regra dele, e nada corrigia isso até à troca de app seguinte.
+     */
+    suspend fun getWhenLoaded(packageName: String, timeoutMs: Long = 3_000L): AppOverrideEntity? {
+        if (!loaded.value) withTimeoutOrNull(timeoutMs) { loaded.first { it } }
+        return get(packageName)
+    }
 
     fun has(packageName: String): Boolean = get(packageName) != null
 
@@ -64,8 +81,13 @@ class AppOverrideRepository @Inject constructor(
      * pertence ao repositório, que vive enquanto o processo viver.
      */
     fun upsertAsync(entity: AppOverrideEntity) {
-        repositoryScope.launch { dao.save(entity) }
+        // Um só escritor, por ordem: dois toques seguidos no overlay lançavam duas coroutines no
+        // pool de IO (multi-thread) e a fotografia mais antiga podia ser gravada por ÚLTIMO.
+        repositoryScope.launch(serialWriter) { dao.save(entity) }
     }
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private val serialWriter = Dispatchers.IO.limitedParallelism(1)
 
     suspend fun delete(packageName: String) = withContext(Dispatchers.IO) {
         dao.deleteByPackageName(packageName)

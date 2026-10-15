@@ -46,6 +46,7 @@ class ForegroundAppWatcherService : AccessibilityService() {
     // ForegroundAppTracker para o porquê de isto ter deixado de ser um `prefs.getString`.
     @Inject lateinit var foregroundTracker: ForegroundAppTracker
 
+    @Volatile
     private var currentApp = ""
 
     /** Gestos do botão Home (toque simples/duplo/triplo/longo) -- ver HomeGestureDetector. */
@@ -86,12 +87,27 @@ class ForegroundAppWatcherService : AccessibilityService() {
         // `canRetrieveWindowContent="false"` (ver accessibility_service_config.xml), portanto essa
         // propriedade devolve sempre null e a semeadura falharia em silêncio. O tracker resolve o
         // app em primeiro plano pelo UsageStatsManager, que não precisa dessa flag.
-        val pkg = foregroundTracker.resolveForegroundPackage() ?: return
-        currentApp = pkg
-        val isUserApp = foregroundTracker.onForegroundPackage(pkg)
+        //
+        // Janela longa (6 h) só nesta semeadura: se o processo morreu a meio de um jogo (LMK), o
+        // jogo já está à frente há mais do que os 60 s da sondagem normal e, sem isto, nenhum
+        // perfil era aplicado até o utilizador sair e voltar a entrar.
         applyJob?.cancel()
         applyJob = scope.launch {
-            applyProfile(if (isUserApp) overrideRepository.get(pkg) else null)
+            // Consulta de 6 h de eventos: fora da thread principal.
+            val pkg = foregroundTracker.resolveForegroundPackage(SEED_LOOKBACK_MS)
+            if (pkg == null) {
+                // Não se sabe o que está à frente: aplica o perfil GLOBAL (o que o utilizador
+                // escolheu por omissão) em vez de deixar o aparelho no estado de arranque.
+                applyProfile(null)
+                return@launch
+            }
+            // Um evento de acessibilidade pode ter chegado entretanto: esse manda.
+            if (currentApp.isNotEmpty()) return@launch
+            currentApp = pkg
+            val isUserApp = foregroundTracker.onForegroundPackage(pkg)
+            // Espera pela primeira leitura do Room: num processo acabado de arrancar o cache está
+            // vazio e a regra do jogo era lida como "não existe".
+            applyProfile(if (isUserApp) overrideRepository.getWhenLoaded(pkg) else null)
         }
     }
 
@@ -158,7 +174,7 @@ class ForegroundAppWatcherService : AccessibilityService() {
 
             if (isUserApp) {
                 // Regra do jogo, ou os valores globais quando o jogo ainda não tem regra própria.
-                applyProfile(overrideRepository.get(pkg))
+                applyProfile(overrideRepository.getWhenLoaded(pkg))
             } else {
                 // Saímos de um jogo para a home/sistema/própria app: devolvemos o aparelho ao
                 // perfil GLOBAL. Sem isto, o limite do último jogo continuava a valer para o
@@ -195,7 +211,8 @@ class ForegroundAppWatcherService : AccessibilityService() {
         }
 
         // 2. Ventoinha baseada no modelo FanMode
-        val fanModeValue = override?.fanSettingsValue ?: prefs.fanMode
+        // Numa regra, -1 ("Stock" no editor por app) quer dizer "segue o global".
+        val fanModeValue = override?.fanSettingsValue?.takeIf { v -> FanMode.selectable.any { it.settingsValue == v } } ?: prefs.fanMode
         performanceManager.applyFanMode(FanMode.fromSettingsValue(fanModeValue))
 
         // 3. Limite térmico por jogo (null = segue o global da aba Performance).
@@ -243,5 +260,8 @@ class ForegroundAppWatcherService : AccessibilityService() {
     private companion object {
         /** Ver o comentário em `onAccessibilityEvent` sobre por que existe esta espera. */
         const val APPLY_DEBOUNCE_MS = 120L
+
+        /** Janela da semeadura inicial (ver onServiceConnected). */
+        const val SEED_LOOKBACK_MS = 6 * 60 * 60 * 1000L
     }
 }

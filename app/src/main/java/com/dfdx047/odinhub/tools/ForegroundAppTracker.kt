@@ -103,6 +103,10 @@ class ForegroundAppTracker @Inject constructor(
                     val pkg = resolveForegroundPackage()
                     if (pkg != null) {
                         onForegroundPackage(pkg)
+                    } else if (PermissionChecker.hasUsageAccess(context)) {
+                        // Com acesso às estatísticas, "nenhum evento" só quer dizer que ninguém
+                        // mudou de app no último minuto: mantém o estado que já tínhamos (antes
+                        // isto mostrava o puxador no launcher ao fim de 60 s parado).
                     } else {
                         // Sem acessibilidade E sem acesso a estatísticas de uso: não temos como
                         // saber onde estamos. Mostrar o puxador é o mal menor -- o utilizador
@@ -190,12 +194,12 @@ class ForegroundAppTracker @Inject constructor(
      * aí falharia em silêncio. A permissão PACKAGE_USAGE_STATS já é pedida e verificada no
      * arranque da app (ver PermissionChecker/MainActivity).
      */
-    fun resolveForegroundPackage(): String? = runCatching {
+    fun resolveForegroundPackage(lookbackMs: Long = FOREGROUND_LOOKBACK_MS): String? = runCatching {
         val usageStats = context.getSystemService(Context.USAGE_STATS_SERVICE) as? UsageStatsManager
             ?: return@runCatching null
 
         val now = System.currentTimeMillis()
-        val events = usageStats.queryEvents(now - FOREGROUND_LOOKBACK_MS, now)
+        val events = usageStats.queryEvents(now - lookbackMs, now)
         val event = UsageEvents.Event()
         var lastResumed: String? = null
 

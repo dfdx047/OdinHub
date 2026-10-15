@@ -173,15 +173,33 @@ fun SettingsScreen(viewModel: MainViewModel = hiltViewModel(), navigateToOverrid
     val rawTheme = AvailableThemes.getOrElse(uiState.selectedThemeIndex) { AvailableThemes[0] }
     val finalTheme = getResolvedTheme(rawTheme, uiState.useAmoledBlack)
 
-    var liveWallpaperType by rememberSaveable { mutableStateOf("Static") }
-    var blurEnabled by rememberSaveable { mutableStateOf(true) }
-    var blurIntensity by rememberSaveable { mutableFloatStateOf(0.4f) }
-    var wallpaperOpacity by rememberSaveable { mutableFloatStateOf(0.85f) }
+    // Fundo: arranca do que ficou gravado (antes voltava sempre ao padrão ao reabrir a app).
+    val savedWallpaper = remember { viewModel.wallpaperSettings() }
+    var liveWallpaperType by rememberSaveable { mutableStateOf(savedWallpaper.type) }
+    var blurEnabled by rememberSaveable { mutableStateOf(savedWallpaper.blur) }
+    var blurIntensity by rememberSaveable { mutableFloatStateOf(savedWallpaper.blurIntensity) }
+    var wallpaperOpacity by rememberSaveable { mutableFloatStateOf(savedWallpaper.opacity) }
 
-    var selectedStaticRes by rememberSaveable { mutableIntStateOf(R.drawable.static_wallpaper_1) }
-    var selectedCustomUriString by rememberSaveable { mutableStateOf<String?>(null) }
+    var selectedStaticRes by rememberSaveable { mutableIntStateOf(if (savedWallpaper.staticIndex == 2) R.drawable.static_wallpaper_2 else R.drawable.static_wallpaper_1) }
+    var selectedCustomUriString by rememberSaveable { mutableStateOf(savedWallpaper.customUri) }
     val selectedCustomUri = selectedCustomUriString?.let { Uri.parse(it) }
-    var selectedWallpaperName by rememberSaveable { mutableStateOf(if (isEn) "Preset 1" else "Predefinição 1") }
+    var selectedWallpaperName by rememberSaveable { mutableStateOf(savedWallpaper.name ?: (if (isEn) "Preset 1" else "Predefinição 1")) }
+
+    // Grava as alterações (com uma pequena espera: arrastar um slider não escreve a cada frame).
+    LaunchedEffect(liveWallpaperType, blurEnabled, blurIntensity, wallpaperOpacity, selectedStaticRes, selectedCustomUriString, selectedWallpaperName) {
+        kotlinx.coroutines.delay(400)
+        viewModel.saveWallpaperSettings(
+            MainViewModel.WallpaperSettings(
+                type = liveWallpaperType,
+                blur = blurEnabled,
+                blurIntensity = blurIntensity,
+                opacity = wallpaperOpacity,
+                staticIndex = if (selectedStaticRes == R.drawable.static_wallpaper_2) 2 else 1,
+                customUri = selectedCustomUriString,
+                name = selectedWallpaperName,
+            ),
+        )
+    }
 
     // Delega no SoundManager (respeita o volume/on-off configurados na aba Sistema) em vez de
     // criar um MediaPlayer novo com volume fixo (0.8f) a cada toque, como acontecia antes.
@@ -206,10 +224,10 @@ fun SettingsScreen(viewModel: MainViewModel = hiltViewModel(), navigateToOverrid
             text = {
                 Text(
                     if (isEn) {
-                        "Odin Hub could not reach the PServerBinder helper (stock AYN firmware), so performance, " +
+                        "Odin Hub could not reach the PServerBinder helper (stock AYN/Retroid firmware), so performance, " +
                             "fan and display controls will not affect the device. Everything else still works."
                     } else {
-                        "O Odin Hub não conseguiu alcançar o PServerBinder (firmware AYN de fábrica), por isso os controlos " +
+                        "O Odin Hub não conseguiu alcançar o PServerBinder (firmware AYN/Retroid de fábrica), por isso os controlos " +
                             "de desempenho, ventoinha e ecrã não vão afetar o aparelho. O resto continua a funcionar."
                     },
                     color = finalTheme.text.copy(alpha = 0.8f),
@@ -406,7 +424,7 @@ fun OdinHubWelcomeScreen(theme: ConsoleTheme, isEn: Boolean, currentThemeIndex: 
                 }
             }
 
-            ConsoleCard(if (isEn) "Theme" else "Tema", AvailableThemes[currentThemeIndex].name, theme, playClick = { expandedTheme = true }) {
+            ConsoleCard(if (isEn) "Theme" else "Tema", AvailableThemes.getOrElse(currentThemeIndex) { AvailableThemes[0] }.name, theme, playClick = { expandedTheme = true }) {
                 DropdownMenu(expanded = expandedTheme, onDismissRequest = { expandedTheme = false }, modifier = Modifier.background(theme.surface)) {
                     AvailableThemes.forEachIndexed { index, consoleTheme -> DropdownMenuItem(text = { Text(consoleTheme.name, color = theme.text, fontFamily = theme.fontFamily) }, onClick = { onThemeChange(index); expandedTheme = false; haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove) }) }
                 }
@@ -505,6 +523,8 @@ fun PerformancePanel(uiState: MainUiModel, viewModel: MainViewModel, theme: Cons
     val isClockMode = uiState.activeLimitMode == "CLOCK"
 
     Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        DeviceInfoCard(device = uiState.device, tables = uiState.clockTables, theme = theme, isEn = isEn)
+
         ConsoleCard(if (isEn) "Per-App Overrides" else "Configurações por Aplicativo", if (isEn) "Customize TDP, Clocks, and Shaders per game" else "Personalize TDP, Clocks e Shaders individualmente por jogo", theme, playClick = { navigateToOverrideList(); playClick() }) {
             Row(modifier = Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Text(if (isEn) "Manage game-specific rules" else "Gerenciar regras específicas de jogos", color = theme.text, fontFamily = theme.fontFamily, fontSize = 12.sp)
@@ -519,8 +539,10 @@ fun PerformancePanel(uiState: MainUiModel, viewModel: MainViewModel, theme: Cons
             // cada um com o seu próprio mapeamento de números, pelo que a ventoinha escolhida
             // aqui era reinterpretada como outro modo (ou como "Stock") assim que o serviço de
             // acessibilidade reaplicava os perfis ao trocar de app.
-            for (mode in FanMode.selectable) {
-                val isSel = uiState.fanMode == mode.settingsValue
+            // "Stock" devolve a ventoinha ao modo que o sistema tinha antes (ver
+            // PerformanceManager.applyFanMode); antes não havia forma de voltar atrás.
+            for (mode in FanMode.selectable + FanMode.Stock) {
+                val isSel = if (mode == FanMode.Stock) FanMode.selectable.none { it.settingsValue == uiState.fanMode } else uiState.fanMode == mode.settingsValue
                 Box(modifier = Modifier.weight(1f).clip(RoundedCornerShape(6.dp)).background(if (isSel) theme.primary else Color.Transparent).clickable { viewModel.updateFanMode(mode.settingsValue) }.padding(vertical = 10.dp), contentAlignment = Alignment.Center) {
                     Text(mode.shortLabel, color = if (isSel) theme.onPrimary else theme.text.copy(alpha = 0.6f), fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 }
@@ -542,6 +564,7 @@ fun PerformancePanel(uiState: MainUiModel, viewModel: MainViewModel, theme: Cons
             tdpProfileId = uiState.tdpProfileId,
             tdpValue = uiState.tdpValue,
             customProfiles = uiState.customProfiles,
+            autoTdp = uiState.autoTdp,
             theme = theme,
             isEn = isEn,
             onSelectProfile = { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove); viewModel.selectTdpProfile(it); playClick() },
@@ -551,6 +574,7 @@ fun PerformancePanel(uiState: MainUiModel, viewModel: MainViewModel, theme: Cons
         )
 
         ManualClockCard(
+            soc = uiState.device.soc,
             enabled = isClockMode,
             tables = uiState.clockTables,
             perfMHz = uiState.cpuPerfClock,
@@ -662,13 +686,13 @@ fun DisplayPanel(uiState: MainUiModel, viewModel: MainViewModel, theme: ConsoleT
             Column(modifier = Modifier.padding(16.dp)) {
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     Text((if (isEn) "Saturation: " else "Saturação: ") + "%.1f".format(uiState.currentSaturation), color = theme.text, fontFamily = theme.fontFamily)
-                    Text("RESET", color = theme.primary, fontWeight = FontWeight.Bold, modifier = Modifier.clickable { viewModel.resetDisplayColors(); playClick() })
+                    Text(if (isEn) "RESET" else "REDEFINIR", color = theme.primary, fontWeight = FontWeight.Bold, modifier = Modifier.clickable { viewModel.resetDisplayColors(); playClick() })
                 }
                 Slider(value = uiState.currentSaturation, onValueChange = { viewModel.saveSaturation(it) }, valueRange = 0.0f..2.0f, colors = SliderDefaults.colors(thumbColor = theme.primary, activeTrackColor = theme.primary))
                 Spacer(Modifier.height(8.dp))
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     Text((if (isEn) "Temperature: " else "Temperatura: ") + "${uiState.currentTemperature.toInt()}K", color = theme.text, fontFamily = theme.fontFamily)
-                    Text("RESET", color = theme.primary, fontWeight = FontWeight.Bold, modifier = Modifier.clickable { viewModel.resetDisplayColors(); playClick() })
+                    Text(if (isEn) "RESET" else "REDEFINIR", color = theme.primary, fontWeight = FontWeight.Bold, modifier = Modifier.clickable { viewModel.resetDisplayColors(); playClick() })
                 }
                 Slider(value = uiState.currentTemperature, onValueChange = { viewModel.saveTemperature(it) }, valueRange = 4000f..9000f, colors = SliderDefaults.colors(thumbColor = theme.primary, activeTrackColor = theme.primary))
             }
@@ -724,6 +748,9 @@ fun ControlsPanel(uiState: MainUiModel, viewModel: MainViewModel, theme: Console
         // gestos configuráveis do Home (screenshot, gravação de ecrã, overlay...).
         HomeGesturesCard(config = uiState.homeGestures, theme = theme, isEn = isEn, onChange = { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove); viewModel.updateHomeGestures(it); playClick() })
 
+        // Só em aparelhos com botões traseiros remapeáveis pelo firmware (família Odin; nos
+        // Retroid a chave remap_custom_to_mX_value pode não existir -- ver DeviceCapabilities).
+        if (uiState.hasBackButtons) {
         ConsoleSectionHeader(if (isEn) "Hardware Mapping" else "Mapeamento Físico", theme)
 
         ConsoleCard(if (isEn) "Back Buttons (M1/M2)" else "Botões Traseiros (M1/M2)", if (isEn) "Native remap, or macros / combos" else "Mapeamento nativo, ou macros / combos", theme, playClick = null) {
@@ -747,6 +774,7 @@ fun ControlsPanel(uiState: MainUiModel, viewModel: MainViewModel, theme: Console
             }
             MacroEntryRow("M2", uiState.m2MacroEnabled, uiState.m2MacroSteps.size, theme, isEn) { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove); playClick(); viewModel.openMacroEditor("m2") }
         }
+        }
     }
 }
 
@@ -768,8 +796,13 @@ fun SystemPanel(
     var expandedTheme by rememberSaveable { mutableStateOf(false) }
     var expandedWallType by rememberSaveable { mutableStateOf(false) }
 
-    val imagePickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri -> uri?.let { onCustomUriSelected(it, "Custom Image") } }
-    val videoPickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri -> uri?.let { onCustomUriSelected(it, "Custom Video") } }
+    // OpenDocument + permissão persistente: com GetContent o acesso ao ficheiro escolhido
+    // expirava com o processo e o fundo personalizado ficava em branco no arranque seguinte.
+    fun keepAccess(uri: Uri) {
+        runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+    }
+    val imagePickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let { keepAccess(it); onCustomUriSelected(it, if (isEn) "Custom image" else "Imagem personalizada") } }
+    val videoPickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let { keepAccess(it); onCustomUriSelected(it, if (isEn) "Custom video" else "Vídeo personalizado") } }
 
     val losslessPickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         uri?.let {
@@ -865,7 +898,7 @@ fun SystemPanel(
         }
 
         ConsoleSectionHeader(if (isEn) "UI Customization" else "Personalização UI", theme)
-        ConsoleCard(if (isEn) "Console Theme" else "Tema do Console", AvailableThemes[currentThemeIndex].name, theme, playClick = { expandedTheme = true; playClick() }) {
+        ConsoleCard(if (isEn) "Console Theme" else "Tema do Console", AvailableThemes.getOrElse(currentThemeIndex) { AvailableThemes[0] }.name, theme, playClick = { expandedTheme = true; playClick() }) {
             DropdownMenu(expanded = expandedTheme, onDismissRequest = { expandedTheme = false }, modifier = Modifier.background(theme.surface)) {
                 AvailableThemes.forEachIndexed { index, consoleTheme -> DropdownMenuItem(text = { Text(consoleTheme.name, color = if (currentThemeIndex == index) theme.primary else theme.text, fontFamily = theme.fontFamily) }, onClick = { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove); onThemeChange(index); expandedTheme = false; playClick() }) }
             }
@@ -878,9 +911,11 @@ fun SystemPanel(
         }
 
         ConsoleSectionHeader(if (isEn) "Live Wallpaper & Background" else "Live Wallpaper & Fundo", theme)
-        ConsoleCard(if (isEn) "Wallpaper Type" else "Tipo de Wallpaper", liveWallpaperType, theme, playClick = { expandedWallType = true; playClick() }) {
+        // Os valores guardados continuam "Static"/"Live (MP4)"; só o texto mostrado é traduzido.
+        fun wallTypeLabel(type: String) = if (type == "Static") (if (isEn) "Static" else "Estático") else (if (isEn) "Live (MP4)" else "Animado (MP4)")
+        ConsoleCard(if (isEn) "Wallpaper Type" else "Tipo de Wallpaper", wallTypeLabel(liveWallpaperType), theme, playClick = { expandedWallType = true; playClick() }) {
             DropdownMenu(expanded = expandedWallType, onDismissRequest = { expandedWallType = false }, modifier = Modifier.background(theme.surface)) {
-                listOf("Static", "Live (MP4)").forEach { type -> DropdownMenuItem(text = { Text(type, color = theme.text, fontFamily = theme.fontFamily) }, onClick = { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove); onLiveWallpaperTypeChange(type); expandedWallType = false; playClick() }) }
+                listOf("Static", "Live (MP4)").forEach { type -> DropdownMenuItem(text = { Text(wallTypeLabel(type), color = theme.text, fontFamily = theme.fontFamily) }, onClick = { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove); onLiveWallpaperTypeChange(type); expandedWallType = false; playClick() }) }
             }
         }
         ConsoleCard(if (isEn) "Blur & Opacity Adjustments" else "Ajustes de Blur e Opacidade", if (isEn) "Control background visibility" else "Controlar visibilidade do fundo", theme, playClick = null) {
@@ -899,18 +934,18 @@ fun SystemPanel(
             Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (liveWallpaperType == "Static") {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(onClick = { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove); onPresetStaticSelected(R.drawable.static_wallpaper_1, "Preset 1"); playClick() }, colors = ButtonDefaults.buttonColors(containerColor = theme.primary)) { Text("Wallpaper 1", color = theme.onPrimary, fontFamily = theme.fontFamily) }
-                        Button(onClick = { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove); onPresetStaticSelected(R.drawable.static_wallpaper_2, "Preset 2"); playClick() }, colors = ButtonDefaults.buttonColors(containerColor = theme.primary)) { Text("Wallpaper 2", color = theme.onPrimary, fontFamily = theme.fontFamily) }
+                        Button(onClick = { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove); onPresetStaticSelected(R.drawable.static_wallpaper_1, if (isEn) "Preset 1" else "Predefinição 1"); playClick() }, colors = ButtonDefaults.buttonColors(containerColor = theme.primary)) { Text("Wallpaper 1", color = theme.onPrimary, fontFamily = theme.fontFamily) }
+                        Button(onClick = { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove); onPresetStaticSelected(R.drawable.static_wallpaper_2, if (isEn) "Preset 2" else "Predefinição 2"); playClick() }, colors = ButtonDefaults.buttonColors(containerColor = theme.primary)) { Text("Wallpaper 2", color = theme.onPrimary, fontFamily = theme.fontFamily) }
                     }
                 } else {
                     Button(onClick = { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove); onPresetVideoSelected(); playClick() }, colors = ButtonDefaults.buttonColors(containerColor = theme.primary)) { Text(if (isEn) "Default Live Wallpaper" else "Live Wallpaper Padrão", color = theme.onPrimary, fontFamily = theme.fontFamily) }
                 }
                 Spacer(modifier = Modifier.height(4.dp))
-                Button(onClick = { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove); if (liveWallpaperType == "Static") imagePickerLauncher.launch("image/*") else videoPickerLauncher.launch("video/*"); playClick() }, colors = ButtonDefaults.buttonColors(containerColor = theme.surface)) { Text(if (isEn) "Choose from device..." else "Escolher do dispositivo...", color = theme.text, fontFamily = theme.fontFamily) }
+                Button(onClick = { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove); if (liveWallpaperType == "Static") imagePickerLauncher.launch(arrayOf("image/*")) else videoPickerLauncher.launch(arrayOf("video/*")); playClick() }, colors = ButtonDefaults.buttonColors(containerColor = theme.surface)) { Text(if (isEn) "Choose from device..." else "Escolher do dispositivo...", color = theme.text, fontFamily = theme.fontFamily) }
             }
         }
         ConsoleSectionHeader(if (isEn) "About" else "Sobre", theme)
-        AboutCard(theme = theme, isEn = isEn, playClick = playClick, onReplayBoot = onReplayBoot)
+        AboutCard(theme = theme, isEn = isEn, playClick = playClick, onReplayBoot = onReplayBoot, deviceLine = "${uiState.device.name} · ${uiState.device.soc.label}")
     }
 }
 
@@ -928,6 +963,7 @@ private fun AboutCard(
     isEn: Boolean,
     playClick: () -> Unit,
     onReplayBoot: () -> Unit,
+    deviceLine: String,
 ) {
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
@@ -958,7 +994,7 @@ private fun AboutCard(
             Spacer(Modifier.height(14.dp))
             AboutRow(if (isEn) "Developer" else "Desenvolvedor", AppInfo.DEVELOPER, theme)
             AboutRow(if (isEn) "Version" else "Versão", "${AppInfo.version} (${AppInfo.versionCode})", theme)
-            AboutRow(if (isEn) "Device" else "Aparelho", "${Build.MANUFACTURER} ${Build.MODEL}", theme)
+            AboutRow(if (isEn) "Device" else "Aparelho", deviceLine, theme)
             AboutRow("Android", "${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})", theme)
 
             Spacer(Modifier.height(16.dp))
@@ -1084,7 +1120,10 @@ fun ConsoleToggle(checked: Boolean, theme: ConsoleTheme, onCheckedChange: (Boole
 @Composable
 fun ConsoleRemapDialog(initialValue: Int, theme: ConsoleTheme, isEn: Boolean, onCancel: () -> Unit, onReset: () -> Unit, onSave: (Int) -> Unit) {
     val focusRequester = remember { FocusRequester() }
-    var userValue by remember { mutableIntStateOf(initialValue) }
+    // Chaveado no valor inicial: o ViewModel abre o diálogo antes de a leitura do mapeamento atual
+    // chegar (-1 = a ler). Sem a chave, o diálogo ficava com o código do botão ANTERIOR e um
+    // "Salvar" sem carregar em nada remapeava M2 para a tecla do M1 (ou para 0).
+    var userValue by remember(initialValue) { mutableIntStateOf(initialValue) }
 
     Dialog(onDismissRequest = onCancel) {
         Surface(shape = RoundedCornerShape(16.dp), color = theme.surface, modifier = Modifier.focusRequester(focusRequester).focusable().onKeyEvent { if (it.type == KeyEventType.KeyUp) { userValue = it.nativeKeyEvent.keyCode }; true }) {
@@ -1093,12 +1132,15 @@ fun ConsoleRemapDialog(initialValue: Int, theme: ConsoleTheme, isEn: Boolean, on
                 Spacer(Modifier.height(16.dp))
                 Text(if (isEn) "Press the new button..." else "Pressione o novo botão...", color = theme.text.copy(alpha = 0.7f), fontFamily = theme.fontFamily)
                 Spacer(Modifier.height(8.dp))
-                Text(KeyEvent.keyCodeToString(userValue).replace("KEYCODE_", ""), color = theme.text, fontSize = 18.sp, fontWeight = FontWeight.Bold, fontFamily = theme.fontFamily)
+                Text(
+                    if (userValue < 0) (if (isEn) "Reading…" else "Lendo…") else KeyEvent.keyCodeToString(userValue).replace("KEYCODE_", ""),
+                    color = theme.text, fontSize = 18.sp, fontWeight = FontWeight.Bold, fontFamily = theme.fontFamily,
+                )
                 Spacer(Modifier.height(24.dp))
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
                     Button(onClick = onReset, colors = ButtonDefaults.buttonColors(containerColor = theme.background)) { Text(if (isEn) "Default" else "Padrão", color = theme.text, fontFamily = theme.fontFamily) }
                     Button(onClick = onCancel, colors = ButtonDefaults.buttonColors(containerColor = theme.background)) { Text(if (isEn) "Cancel" else "Cancelar", color = theme.text, fontFamily = theme.fontFamily) }
-                    Button(onClick = { onSave(userValue) }, colors = ButtonDefaults.buttonColors(containerColor = theme.primary)) { Text(if (isEn) "Save" else "Salvar", color = theme.onPrimary, fontFamily = theme.fontFamily) }
+                    Button(onClick = { if (userValue >= 0) onSave(userValue) }, enabled = userValue >= 0, colors = ButtonDefaults.buttonColors(containerColor = theme.primary)) { Text(if (isEn) "Save" else "Salvar", color = theme.onPrimary, fontFamily = theme.fontFamily) }
                 }
             }
         }

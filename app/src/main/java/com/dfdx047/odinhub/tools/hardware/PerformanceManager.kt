@@ -1,25 +1,32 @@
 package com.dfdx047.odinhub.tools.hardware
 
+import android.content.Context
+import android.os.PowerManager
+import android.system.Os
 import android.util.Log
-import com.dfdx047.odinhub.models.ClusterClockPresets
+import com.dfdx047.odinhub.data.SharedPrefsRepo
+import com.dfdx047.odinhub.models.DeviceProfile
 import com.dfdx047.odinhub.models.FanMode
+import com.dfdx047.odinhub.models.GpuBackend
 import com.dfdx047.odinhub.models.TdpProfiles
+import com.dfdx047.odinhub.tools.DeviceRegistry
 import com.dfdx047.odinhub.tools.ShellExecutor
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
+import java.util.concurrent.atomic.AtomicReference
 import javax.inject.Inject
 import javax.inject.Singleton
-import kotlin.math.abs
 
 /** Resultado da última tentativa de aplicar um [HardwareWriteOp] individual, para diagnóstico na UI. */
 data class HardwareNodeStatus(
@@ -30,386 +37,537 @@ data class HardwareNodeStatus(
     val ok: Boolean,
 )
 
+/** O que o utilizador pediu. O daemon é o ÚNICO a escrever em sysfs, a partir disto. */
+enum class PerfMode { STOCK, TDP, CLOCKS }
+
+data class PerfTargets(
+    val mode: PerfMode = PerfMode.STOCK,
+    /** Só em [PerfMode.CLOCKS]. */
+    val perfRatio: Float = 1f,
+    val primeRatio: Float = 1f,
+    val gpuHz: Long = Long.MAX_VALUE,
+    /** Só em [PerfMode.TDP]. */
+    val watts: Float = 0f,
+    /** Muda a cada troca de MODO (não a cada watt): o AutoTDP só recomeça do zero nessa altura. */
+    val generation: Long = 0,
+)
+
+/** Porque é que o AutoTDP está em pausa (mantém os tetos atuais sem os mexer). */
+enum class AutoTdpPause { CHARGING, SCREEN_OFF, NO_SENSOR }
+
+/** Estado do AutoTDP para a UI ("a medir 9.8 W"). */
+data class AutoTdpTelemetry(
+    val active: Boolean = false,
+    val targetWatts: Float = 0f,
+    val measuredWatts: Float? = null,
+    val cpuPercent: Int = 100,
+    val gpuPercent: Int = 100,
+    val paused: AutoTdpPause? = null,
+)
+
+/**
+ * Motor de clocks/TDP. Toda a escrita em sysfs acontece num ÚNICO daemon:
+ *  - os `apply*` públicos só mudam o alvo ([PerfTargets]) e acordam o daemon -- acabaram as
+ *    corridas entre o passo do AutoTDP e os clocks manuais escritos por outra thread;
+ *  - o daemon só escreve quando o nó NÃO tem já o valor pedido (leitura direta do ficheiro, sem
+ *    root). A versão anterior reescrevia todos os nós a cada segundo, mesmo em Stock e com o ecrã
+ *    desligado: 6-8 transações binder e ~15-20 processos root por segundo, para sempre;
+ *  - em Stock escreve os máximos UMA vez, devolve as permissões originais aos nós (o perf HAL do
+ *    fabricante volta a poder geri-los) e fica parado;
+ *  - com o ecrã desligado, pausa.
+ *
+ * Multi-aparelho: as tabelas, a GPU (Adreno/kgsl ou Mali/GED) e o envelope de potência vêm do
+ * perfil do aparelho detetado ([DeviceRegistry]). As políticas de cpufreq continuam a ser lidas
+ * do kernel em tempo real (a de maior frequência é o "Prime", a seguinte o "Perf").
+ */
 @Singleton
 class PerformanceManager @Inject constructor(
-    private val executor: ShellExecutor
+    @ApplicationContext private val context: Context,
+    private val executor: ShellExecutor,
+    private val prefs: SharedPrefsRepo,
 ) {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    private var hardwareJob: Job? = null
+    private val device: DeviceProfile = DeviceRegistry.current
 
-    private val sysfsGpuMaxPath = "/sys/class/kgsl/kgsl-3d0/max_gpuclk"
+    private val targets = AtomicReference(PerfTargets())
+    private val wake = Channel<Unit>(Channel.CONFLATED)
 
-    /**
-     * Máximo/mínimo da GPU derivados da tabela REAL de frequências do kgsl quando ela é legível
-     * (antes eram 1.1 GHz / 160 MHz fixos, valores do 8 Elite que estão errados no Odin 2). Se
-     * nada for legível, cai na tabela estática por SoC ([clockTables] com source "fallback") e,
-     * em último caso, nos valores do 8 Elite.
-     */
-    private val gpuMaxHz: Long
-        get() = gpuAvailableFreqsHz.maxOrNull()
-            ?: _clockTables.value.gpuMHz.maxOrNull()?.let { it * 1_000_000L }
-            ?: DEFAULT_GPU_MAX_HZ
-    private val gpuMinHz: Long
-        get() = gpuAvailableFreqsHz.minOrNull()
-            ?: _clockTables.value.gpuMHz.minOrNull()?.let { it * 1_000_000L }
-            ?: DEFAULT_GPU_MIN_HZ
-
-    private var targetPerfPercent = 1.0f
-    private var targetPrimePercent = 1.0f
-    // Arranca no máximo do 8 Elite; a escrita encaixa sempre no OPP suportado mais alto por
-    // baixo (snapToSupported), por isso noutro SoC isto significa simplesmente "máximo".
-    private var targetGpu = DEFAULT_GPU_MAX_HZ
-
-    private var isAutoTdp = false
-    private var targetWatts = 15f
-
-    /**
-     * Tabelas de frequências reais do SoC (OPPs do kernel), em MHz, para a UI desenhar chips com
-     * valores que o hardware suporta mesmo. Preenchidas uma vez, em Dispatchers.IO, no arranque
-     * (ver [loadClockTables]); até lá é [ClockTables.EMPTY].
-     */
     private val _clockTables = MutableStateFlow(ClockTables.EMPTY)
+
+    /** Tabelas de frequências reais do SoC (OPPs do kernel), em MHz, para os chips da UI. */
     val clockTables: StateFlow<ClockTables> = _clockTables.asStateFlow()
 
-    /**
-     * Estado da última passada de aplicação de limites, um item por nó de sysfs tocado.
-     * Antes desta auditoria não existia nenhum sinal de erro entre [PerformanceManager] e a UI:
-     * uma escrita podia falhar (kernel a rejeitar, permissão negada, PServer indisponível) e o
-     * slider continuava a mostrar o valor pedido como se tivesse "colado". Ecrãs/ViewModels podem
-     * agora observar este StateFlow para mostrar um aviso real ao utilizador.
-     */
     private val _lastApplyStatus = MutableStateFlow<List<HardwareNodeStatus>>(emptyList())
+
+    /** Nós que falharam na última passada (a UI mostra um aviso). Só falhas reais, não "já estava". */
     val lastApplyStatus: StateFlow<List<HardwareNodeStatus>> = _lastApplyStatus.asStateFlow()
 
-    /**
-     * Frequências que a GPU Adreno aceita. Mesmo problema dos clusters de CPU: escrever um valor
-     * arbitrário em `max_gpuclk` faz o driver assentar no OPP mais próximo, e a verificação por
-     * leitura reportava isso como falha ("Não foi possível aplicar: gpu-max-clock").
-     *
-     * Declarado ANTES do `init` de propósito: o daemon e o carregamento das tabelas arrancam em
-     * Dispatchers.IO a partir do `init`, e um delegate `lazy` declarado depois do `init` ainda
-     * não estaria atribuído se a coroutine corresse antes de o construtor terminar.
-     */
-    private val gpuAvailableFreqsHz: List<Long> by lazy {
-        listOf(
-            "/sys/class/kgsl/kgsl-3d0/gpu_available_frequencies",
-            "/sys/class/kgsl/kgsl-3d0/devfreq/available_frequencies",
-        ).asSequence()
-            .map { readAvailableFreqs(File(it)) }
-            .firstOrNull { it.isNotEmpty() }
-            .orEmpty()
-    }
+    private val _autoTdp = MutableStateFlow(AutoTdpTelemetry())
+    val autoTdpStatus: StateFlow<AutoTdpTelemetry> = _autoTdp.asStateFlow()
+
+    // ---- estado só do daemon (uma única coroutine) ----
+    @Volatile private var policies: List<CpuPolicyNode> = emptyList()
+    @Volatile private var gpu: GpuControl = GpuControl.None
+    @Volatile private var ppmAvailable = false
+    private var autoState: AutoTdpState? = null
+    private var lastTargetWatts: Float? = null
+    /** Geração já aplicada. Arranca em 0 = os alvos iniciais: nada é escrito no arranque. */
+    @Volatile private var appliedGeneration = 0L
+    private var appliedTargets: PerfTargets? = null
+    private val lastResults = HashMap<String, Pair<HardwareNodeStatus, Long>>()
+    private val backoffUntil = HashMap<String, Long>()
+    private val lastPpm = HashMap<String, String>()
+
+    private val powerManager: PowerManager? = context.getSystemService(PowerManager::class.java)
 
     init {
-        scope.launch { loadClockTables() }
-        startHardwareDaemon()
-    }
-
-    /**
-     * Lê as tabelas de OPPs: `scaling_available_frequencies` de cada política de cpufreq (a
-     * política com maior `cpuinfo_max_freq` é o Prime; a seguinte é o Perf) e `gpu_available_frequencies` do kgsl. Estes nós são normalmente legíveis por
-     * qualquer utilizador, sem root. Se nada for legível, usa a tabela estática por SoC de
-     * `ClusterClockPresets` e marca `source = "fallback"`. Nunca lança: uma falha aqui só
-     * significa chips de reserva na UI.
-     */
-    private fun loadClockTables() {
-        val fallback = ClusterClockPresets.fallbackFor(
-            socModel = runCatching { android.os.Build.SOC_MODEL }.getOrNull(),
-            hardware = runCatching { android.os.Build.HARDWARE }.getOrNull(),
-        )
-        val loaded = runCatching {
-            val sorted = getCpuPolicies().sortedBy { it.cpuinfoMaxFreqKHz }
-            val prime = sorted.lastOrNull()?.availableFreqsKHz.orEmpty()
-            // Perf = a política logo abaixo do Prime (a mesma que absoluteClocksToRatios usa como
-            // 100%). Juntar TODAS as outras misturava, no 8 Gen 2, o cluster de eficiência
-            // (até 2016 MHz) com o de performance (até 2803 MHz) numa só fila de chips.
-            val perf = sorted.getOrNull(sorted.lastIndex - 1)?.availableFreqsKHz.orEmpty()
-            ClockTables(
-                perfMHz = ClockTableCuration.kHzToMHz(perf),
-                primeMHz = ClockTableCuration.kHzToMHz(prime),
-                gpuMHz = ClockTableCuration.hzToMHz(gpuAvailableFreqsHz),
-                source = ClockTables.SOURCE_KERNEL,
-            )
-        }.getOrElse {
-            Log.w(TAG, "loadClockTables: falha a ler as tabelas do kernel", it)
-            ClockTables.EMPTY
-        }
-
-        // Cada tabela cai individualmente na reserva: um kernel pode expor as do CPU e não a da
-        // GPU (ou vice-versa). `source` só fica "kernel" quando as três vieram do kernel.
-        val perf = loaded.perfMHz.ifEmpty { fallback.perfMHz }
-        val prime = loaded.primeMHz.ifEmpty { fallback.primeMHz }
-        val gpu = loaded.gpuMHz.ifEmpty { fallback.gpuMHz }
-        val allFromKernel = loaded.perfMHz.isNotEmpty() && loaded.primeMHz.isNotEmpty() && loaded.gpuMHz.isNotEmpty()
-        _clockTables.value = ClockTables(
-            perfMHz = perf,
-            primeMHz = prime,
-            gpuMHz = gpu,
-            source = if (allFromKernel) ClockTables.SOURCE_KERNEL else ClockTables.SOURCE_FALLBACK,
-        )
-        Log.i(TAG, "loadClockTables: perf=${perf.size} prime=${prime.size} gpu=${gpu.size} source=${_clockTables.value.source}")
-    }
-
-    private fun startHardwareDaemon() {
-        hardwareJob?.cancel()
-        hardwareJob = scope.launch {
-            while (isActive) {
-                if (isAutoTdp) {
-                    calculateAutoTdpStep()
-                }
-                writeLimitsToSysfs()
-                delay(1000)
-            }
+        scope.launch {
+            loadHardware()
+            runDaemon()
         }
     }
 
-    private fun calculateAutoTdpStep() {
-        val currentPowerDraw = getRealTimePowerDrawWatts()
-        if (currentPowerDraw <= 0f) return
+    // ------------------------------------------------------------------ API pública
 
-        // Piso do TDP dinâmico: ver TDP_MIN_RATIO em PerformanceCommandBuilder para o porquê de
-        // não usar CPU_MIN_RATIO aqui -- alvos baixos (ex: 5W) precisam de conseguir descer bem
-        // abaixo dos 30% antigos para teres alguma hipótese de convergir de verdade.
-        val minRatio = PerformanceCommandBuilder.TDP_MIN_RATIO
-
-        // Passo proporcional ao erro (em vez de ±5% fixo): quanto mais longe do alvo, maior o
-        // salto por tick, para convergir em segundos em vez de dezenas de ticks -- e para
-        // conseguir mesmo sair da zona alta (100%) e chegar perto de pisos baixos como 12%.
-        val errorRatio = ((currentPowerDraw - targetWatts) / targetWatts).coerceIn(-1f, 1f)
-        val step = 1f + (-errorRatio * 0.12f).coerceIn(-0.20f, 0.20f)
-
-        val outsideDeadband = kotlin.math.abs(currentPowerDraw - targetWatts) > 0.3f
-        if (outsideDeadband) {
-            targetPerfPercent = (targetPerfPercent * step).coerceIn(minRatio, PerformanceCommandBuilder.CPU_MAX_RATIO)
-            targetPrimePercent = (targetPrimePercent * step).coerceIn(minRatio, PerformanceCommandBuilder.CPU_MAX_RATIO)
-            targetGpu = (targetGpu * step).toLong().coerceIn(gpuMinHz, gpuMaxHz)
-        }
-    }
-
-    /**
-     * Varredura dinâmica de políticas (inspirada na arquitetura SysfsFileSystem do Pulse):
-     * lê em tempo de execução todas as políticas de cpufreq disponíveis no kernel do dispositivo,
-     * em vez de assumir caminhos fixos como `policy0`/`policy6` (que variam por SoC/firmware).
-     */
-    private fun getCpuPolicies(): List<CpuPolicyNode> {
-        val policies = mutableListOf<CpuPolicyNode>()
-        try {
-            val dir = File("/sys/devices/system/cpu/cpufreq")
-            dir.listFiles()?.filter { it.isDirectory && it.name.startsWith("policy") }?.forEach { policyDir ->
-                val maxFreqFile = File(policyDir, "cpuinfo_max_freq")
-                val scalingMaxFile = File(policyDir, "scaling_max_freq")
-                val targetFile = if (maxFreqFile.exists()) maxFreqFile else scalingMaxFile
-                if (targetFile.exists()) {
-                    val maxFreq = targetFile.readText().trim().toLongOrNull() ?: 3_000_000L
-                    policies.add(
-                        CpuPolicyNode(
-                            policyPath = policyDir.absolutePath,
-                            cpuinfoMaxFreqKHz = maxFreq,
-                            availableFreqsKHz = readAvailableFreqs(File(policyDir, "scaling_available_frequencies")),
-                        ),
-                    )
-                }
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "getCpuPolicies: falha ao varrer cpufreq", e)
-        }
-        return policies
-    }
-
-    /**
-     * Lê uma lista de frequências suportadas de um nó de sysfs (valores separados por espaços).
-     * Devolve lista vazia se o nó não existir ou não for legível -- nesse caso não encaixamos nada
-     * e mantemos o comportamento antigo.
-     */
-    private fun readAvailableFreqs(file: File): List<Long> = runCatching {
-        if (!file.exists()) return emptyList()
-        file.readText()
-            .trim()
-            .split(Regex("\\s+"))
-            .mapNotNull { it.toLongOrNull() }
-            .sorted()
-    }.getOrElse {
-        Log.w(TAG, "readAvailableFreqs: falha a ler ${file.path}", it)
-        emptyList()
-    }
-
-    private fun writeLimitsToSysfs() {
-        val policies = getCpuPolicies()
-        if (policies.isEmpty()) {
-            Log.w(TAG, "writeLimitsToSysfs: nenhuma política de cpufreq encontrada, nada a aplicar")
-            return
-        }
-
-        val ops = PerformanceCommandBuilder.buildCpuFrequencyOps(
-            policies = policies,
-            perfRatio = targetPerfPercent,
-            primeRatio = targetPrimePercent,
-            // No modo TDP dinâmico o piso tem de ser o do AutoTDP (12%), senão alvos baixos como
-            // 5W ficam presos nos 30% dos clocks manuais e o limite não se sente -- ver
-            // PerformanceCommandBuilder.buildCpuFrequencyOps/TDP_MIN_RATIO.
-            minRatio = if (isAutoTdp) {
-                PerformanceCommandBuilder.TDP_MIN_RATIO
-            } else {
-                // Clocks manuais / Stock: cada chip é um OPP real, por isso o piso é mínimo.
-                PerformanceCommandBuilder.MANUAL_MIN_RATIO
-            },
-        ) + if (File(sysfsGpuMaxPath).exists()) {
-            // Idem CPU: encaixa no OPP suportado mais próximo por baixo, para a verificação por
-            // leitura deixar de acusar falha num limite que de facto foi aplicado.
-            val snappedGpuHz = snapToSupported(targetGpu, gpuAvailableFreqsHz, toleranceAbove = 999_999L)
-            listOf(PerformanceCommandBuilder.buildGpuFrequencyOp(sysfsGpuMaxPath, snappedGpuHz))
-        } else {
-            emptyList()
-        }
-
-        // CAUSA RAIZ (auditoria): a versão anterior concatenava TODOS os nós (CPU perf, CPU prime,
-        // GPU) numa única string com `&&`. Se qualquer nó no meio fosse rejeitado pelo kernel, o
-        // `&&` abortava a cadeia e TODOS os nós seguintes ficavam sem ser escritos — mesmo sem
-        // nenhuma relação com a falha. Aplicamos agora cada nó de forma independente, com
-        // verificação e recuo, para que uma falha isolada (ex: GPU bloqueada pelo bootloader) não
-        // impeça os clocks de CPU de serem aplicados, e vice-versa.
-        val results = ops.map { op -> applyWriteOp(op) }
-        _lastApplyStatus.update { results }
-
-        results.filterNot { it.ok }.forEach {
-            Log.w(TAG, "writeLimitsToSysfs: falha ao aplicar ${it.label} (${it.path}): pedido=${it.requestedValue} lido=${it.appliedValue}")
-        }
-    }
-
-    /**
-     * Aplica uma escrita atómica com resiliência de duas camadas:
-     *  1. Tenta a cadeia completa `chmod 666 && echo && chmod 444` numa única transação binder
-     *     (mais rápido, funciona quando o backend interpreta o comando com um shell real).
-     *  2. Se a leitura de verificação mostrar que o valor não colou, recua para os três passos
-     *     como transações binder separadas — cobre o caso de backends que não suportam operadores
-     *     de shell (`&&`/`>`) num único argumento de comando.
-     * Em ambos os casos, o valor é sempre lido de volta do sysfs para confirmar que realmente foi
-     * aplicado, em vez de confiar cegamente no `Result.success` do executor.
-     */
-    private fun applyWriteOp(op: HardwareWriteOp, retries: Int = 1): HardwareNodeStatus {
-        executor.executeAsRoot(op.asChainedCommand())
-        var readBack = readSysfsValue(op.targetPath)
-        if (isApplied(op.value, readBack)) {
-            return HardwareNodeStatus(op.label, op.targetPath, op.value, readBack, ok = true)
-        }
-
-        repeat(retries + 1) {
-            op.asSequentialCommands().forEach { executor.executeAsRoot(it) }
-            readBack = readSysfsValue(op.targetPath)
-            if (isApplied(op.value, readBack)) {
-                return HardwareNodeStatus(op.label, op.targetPath, op.value, readBack, ok = true)
-            }
-        }
-        return HardwareNodeStatus(op.label, op.targetPath, op.value, readBack, ok = false)
-    }
-
-    /**
-     * Decide se uma escrita "pegou", comparando o pedido com o que o nó devolve.
-     *
-     * Antes era uma igualdade exata de strings, e isso gerava FALSOS NEGATIVOS constantes: estes
-     * nós são LIMITES MÁXIMOS cujos valores têm de existir na tabela de OPPs do kernel. Ao pedir
-     * um valor intermédio, o driver assenta na frequência suportada mais próxima e a leitura
-     * devolve um número diferente do pedido -- ainda que o limite esteja perfeitamente aplicado.
-     * Era esta a origem dos avisos "Não foi possível aplicar: cpu-perf-policy-0 / gpu-max-clock"
-     * a repetirem-se em ciclo enquanto o aparelho estava, de facto, limitado.
-     *
-     * Critério correto para um teto: o valor efetivo não pode ficar ACIMA do pedido. Assentar
-     * abaixo é sucesso. Toleramos 2% acima para o caso de o driver arredondar para o OPP
-     * imediatamente superior. Se o valor lido continuar bem acima, a escrita falhou mesmo (nó
-     * bloqueado, ou outro daemon a repor o valor de fábrica) e aí sim reportamos.
-     */
-    private fun isApplied(requested: String, readBack: String?): Boolean {
-        if (readBack == null) return false
-        if (readBack == requested) return true
-
-        val requestedValue = requested.toLongOrNull() ?: return false
-        val actualValue = readBack.toLongOrNull() ?: return false
-        return actualValue <= (requestedValue * 102) / 100
-    }
-
-    private fun readSysfsValue(path: String): String? {
-        // Lê sempre via root (o nó pode estar de volta a 444/root-only depois do "lock").
-        return executor.executeAsRoot("cat $path").getOrNull()?.trim()
-    }
-
-    fun applyDynamicTdp(watts: Float) {
-        isAutoTdp = true
-        // Intervalo do slider em todos os ecrãs: 1..25 W (ver TdpProfiles). O piso de clocks
-        // continua a ser TDP_MIN_RATIO -- 1 W é um alvo que o loop tenta perseguir, não uma
-        // promessa de que a CPU desce a 4%.
-        targetWatts = watts.coerceIn(TdpProfiles.TDP_MIN_WATTS, TdpProfiles.TDP_MAX_WATTS)
-        val ratio = PerformanceCommandBuilder.wattsToRatio(targetWatts)
-        targetPerfPercent = ratio
-        targetPrimePercent = ratio
-        targetGpu = (gpuMaxHz * ratio).toLong().coerceAtLeast(gpuMinHz)
-        writeLimitsToSysfs()
-    }
-
-    /**
-     * Perfil "Stock" de TDP: sem limite nenhum. Clocks de CPU e GPU a 100% e o loop de AutoTDP
-     * DESLIGADO -- é o que distingue isto de "25 W": com 25 W o loop continua a correr e pode
-     * ainda travar os clocks se o consumo medido passar do alvo.
-     */
-    fun applyStockPerformance() {
-        isAutoTdp = false
-        targetPerfPercent = PerformanceCommandBuilder.CPU_MAX_RATIO
-        targetPrimePercent = PerformanceCommandBuilder.CPU_MAX_RATIO
-        targetGpu = gpuMaxHz
-        writeLimitsToSysfs()
-    }
-
-    /**
-     * Aplica uma seleção de TDP já resolvida (ver `TdpProfiles.resolveWatts`): `null` = Stock,
-     * qualquer outro valor = TDP dinâmico nesses watts. Ponto único de entrada para o Settings,
-     * o overlay e o ForegroundAppWatcherService, para os três se comportarem da mesma maneira.
-     */
+    /** `null` = Stock; qualquer outro valor = TDP dinâmico nesses watts. */
     fun applyTdpSelection(watts: Float?) {
         if (watts == null || TdpProfiles.isStockWatts(watts)) applyStockPerformance() else applyDynamicTdp(watts)
     }
 
+    /**
+     * TDP dinâmico. Mudar só os watts (ex: arrastar o slider) NÃO reinicia o controlador -- ele
+     * continua de onde está e converge para o novo alvo; só a troca de modo recomeça do zero.
+     */
+    fun applyDynamicTdp(watts: Float) {
+        val clamped = TdpProfiles.clampWatts(watts)
+        setTargets { current ->
+            if (current.mode == PerfMode.TDP) current.copy(watts = clamped)
+            else PerfTargets(mode = PerfMode.TDP, watts = clamped, generation = current.generation + 1)
+        }
+    }
+
+    /** Stock: sem limite -- máximos escritos uma vez, nós devolvidos ao sistema, AutoTDP parado. */
+    fun applyStockPerformance() {
+        setTargets { current ->
+            // A geração 0 é o estado de arranque (nunca aplicado): um pedido explícito de Stock
+            // tem de correr pelo menos uma vez, para devolver nós trancados por um processo anterior.
+            if (current.mode == PerfMode.STOCK && current.generation != 0L && appliedGeneration == current.generation) current
+            else PerfTargets(mode = PerfMode.STOCK, generation = current.generation + 1)
+        }
+    }
+
     fun applyAbsoluteClocks(perfClockKHz: Long, primeClockKHz: Long, gpuClockHz: Long) {
-        isAutoTdp = false
-        val policies = getCpuPolicies()
         val (perfRatio, primeRatio) = PerformanceCommandBuilder.absoluteClocksToRatios(
             perfClockKHz = perfClockKHz,
             primeClockKHz = primeClockKHz,
             policies = policies,
+            fallbackPerfMaxKHz = (device.fallbackTables.perfMHz.lastOrNull() ?: 3532) * 1000L,
+            fallbackPrimeMaxKHz = (device.fallbackTables.primeMHz.lastOrNull() ?: 4320) * 1000L,
         )
-        targetPerfPercent = perfRatio
-        targetPrimePercent = primeRatio
-        targetGpu = gpuClockHz.coerceIn(gpuMinHz, gpuMaxHz)
-        writeLimitsToSysfs()
+        setTargets { current ->
+            val generation = if (current.mode == PerfMode.CLOCKS) current.generation else current.generation + 1
+            PerfTargets(PerfMode.CLOCKS, perfRatio, primeRatio, gpuClockHz, generation = generation)
+        }
     }
 
+    /**
+     * Modo da ventoinha. "Stock" agora DEVOLVE o modo que o sistema tinha antes de a app mexer
+     * (antes não fazia nada: um "Sport" de uma regra por jogo ficava ligado no resto do sistema).
+     * BLOQUEANTE (root) -- chamar fora da thread principal.
+     */
     fun applyFanMode(fanMode: FanMode) {
-        fanMode.enable(executor)
-    }
-
-    private fun readTextFile(path: String): String? {
-        return try {
-            File(path).readText().trim()
-        } catch (e: Exception) {
-            null
+        if (fanMode in FanMode.selectable) {
+            if (prefs.fanModeBackup < 0) {
+                executor.getIntSystemSettingOrNull(FanMode.FAN_MODE)?.let { prefs.fanModeBackup = it }
+            }
+            executor.setIntSystemSetting(FanMode.FAN_MODE, fanMode.settingsValue)
+        } else if (fanMode == FanMode.Stock) {
+            val backup = prefs.fanModeBackup
+            if (backup >= 0 && executor.setIntSystemSetting(FanMode.FAN_MODE, backup)) prefs.fanModeBackup = -1
         }
     }
 
-    private fun getRealTimePowerDrawWatts(): Float {
-        return try {
-            val currentUaStr = readTextFile("/sys/class/power_supply/battery/current_now") ?: return 0f
-            val voltageUvStr = readTextFile("/sys/class/power_supply/battery/voltage_now") ?: return 0f
-            val amps = abs(currentUaStr.toFloat() / 1_000_000f)
-            val volts = voltageUvStr.toFloat() / 1_000_000f
-            amps * volts
-        } catch (e: Exception) {
-            0f
+    private fun setTargets(transform: (PerfTargets) -> PerfTargets) {
+        targets.updateAndGet(transform)
+        wake.trySend(Unit)
+    }
+
+    // ------------------------------------------------------------------ descoberta
+
+    private fun loadHardware() {
+        policies = scanCpuPolicies()
+        gpu = createGpuControl()
+        ppmAvailable = device.soc.isMediaTek && File(PPM_HARD_LIMIT).exists()
+
+        val fallback = device.fallbackTables
+        val sorted = policies.sortedBy { it.cpuinfoMaxFreqKHz }
+        val prime = ClockTableCuration.kHzToMHz(sorted.lastOrNull()?.availableFreqsKHz.orEmpty())
+        // Perf = a política logo abaixo do Prime (a mesma que absoluteClocksToRatios usa como 100%).
+        val perf = ClockTableCuration.kHzToMHz(sorted.getOrNull(sorted.lastIndex - 1)?.availableFreqsKHz.orEmpty())
+        val gpuMHz = ClockTableCuration.hzToMHz(gpu.availableHz)
+        val allFromKernel = perf.isNotEmpty() && prime.isNotEmpty() && gpuMHz.isNotEmpty()
+        _clockTables.value = ClockTables(
+            perfMHz = perf.ifEmpty { fallback.perfMHz },
+            primeMHz = prime.ifEmpty { fallback.primeMHz },
+            gpuMHz = gpuMHz.ifEmpty { fallback.gpuMHz },
+            source = if (allFromKernel) ClockTables.SOURCE_KERNEL else ClockTables.SOURCE_FALLBACK,
+        )
+        Log.i(TAG, "${device.name}: ${policies.size} políticas, GPU=${gpu::class.simpleName} (${gpu.availableHz.size} OPPs), PPM=$ppmAvailable, tabelas=${_clockTables.value.source}")
+    }
+
+    /** Varre as políticas de cpufreq do kernel (nunca assume `policy0`/`policy6` fixos). */
+    private fun scanCpuPolicies(): List<CpuPolicyNode> = runCatching {
+        File(CPUFREQ_ROOT).listFiles()
+            ?.filter { it.isDirectory && it.name.startsWith("policy") }
+            ?.mapNotNull { dir ->
+                val max = readLocal("${dir.absolutePath}/cpuinfo_max_freq")?.toLongOrNull()
+                    ?: readLocal("${dir.absolutePath}/scaling_max_freq")?.toLongOrNull()
+                    ?: return@mapNotNull null
+                CpuPolicyNode(
+                    policyPath = dir.absolutePath,
+                    cpuinfoMaxFreqKHz = max,
+                    availableFreqsKHz = parseFreqList(readLocal("${dir.absolutePath}/scaling_available_frequencies")),
+                )
+            }
+            ?.sortedBy { it.policyPath }
+            .orEmpty()
+    }.getOrElse {
+        Log.w(TAG, "scanCpuPolicies: falha a varrer cpufreq", it)
+        emptyList()
+    }
+
+    private fun createGpuControl(): GpuControl = when (device.gpuBackend) {
+        GpuBackend.KGSL -> {
+            val live = GpuControl.Kgsl.TABLE_PATHS.asSequence()
+                .map { parseFreqList(readValue(it)) }
+                .firstOrNull { it.isNotEmpty() }
+                .orEmpty()
+            when {
+                live.isNotEmpty() -> GpuControl.Kgsl(live)
+                File(GpuControl.Kgsl.MAX_PATH).exists() -> GpuControl.Kgsl(device.fallbackTables.gpuMHz.map { it * 1_000_000L })
+                else -> GpuControl.None
+            }
+        }
+        GpuBackend.MTK_GED -> {
+            // /proc/gpufreq só é legível como root; o nó do teto tem de existir (kernel 4.19).
+            val opps = GpuControl.MtkGed.parseOppDump(executor.executeAsRoot("cat ${GpuControl.MtkGed.OPP_DUMP_PATH}").getOrNull())
+            val upboundExists = File(GpuControl.MtkGed.UPBOUND_PATH).exists() ||
+                executor.executeAsRoot("ls ${GpuControl.MtkGed.UPBOUND_PATH}").getOrNull()?.contains("custom_upbound") == true
+            if (opps.isNotEmpty() && upboundExists) GpuControl.MtkGed(opps) else GpuControl.None
         }
     }
+
+    // ------------------------------------------------------------------ daemon
+
+    private suspend fun runDaemon() {
+        while (scope.isActive) {
+            val t = targets.get()
+            try {
+                when (t.mode) {
+                    PerfMode.STOCK -> {
+                        if (appliedGeneration != t.generation) {
+                            applyStockOnce()
+                            appliedGeneration = t.generation
+                        }
+                        _autoTdp.value = AutoTdpTelemetry(active = false)
+                        waitForWake(null)
+                    }
+
+                    PerfMode.CLOCKS -> {
+                        enforce(t.perfRatio, t.primeRatio, t.gpuHz, PerformanceCommandBuilder.MANUAL_MIN_RATIO)
+                        appliedGeneration = t.generation
+                        _autoTdp.value = AutoTdpTelemetry(active = false)
+                        // Re-afirma de vez em quando (um daemon do fabricante pode repor os nós).
+                        waitForWake(if (isInteractive()) CLOCKS_REASSERT_MS else IDLE_WAIT_MS)
+                    }
+
+                    PerfMode.TDP -> tdpTick(t)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "daemon: falha num passo (${t.mode})", e)
+                delay(1_000)
+            }
+        }
+    }
+
+    private suspend fun tdpTick(t: PerfTargets) {
+        val maxWatts = TdpProfiles.TDP_MAX_WATTS
+        val minRatio = PerformanceCommandBuilder.TDP_MIN_RATIO
+        val lastWatts = lastTargetWatts
+        val bigJump = lastWatts != null && kotlin.math.abs(t.watts - lastWatts) / lastWatts > BIG_TARGET_CHANGE
+        if (appliedGeneration != t.generation || autoState == null || bigJump) {
+            // Modo novo, ou um salto grande de alvo (ex: 15 W -> 5 W): recomeça do ponto de
+            // partida estimado em vez de lá chegar a -15% por segundo. Mantém a medição filtrada.
+            autoState = AutoTdpController.initial(t.watts, maxWatts, minRatio).copy(filteredWatts = autoState?.filteredWatts)
+            appliedGeneration = t.generation
+        }
+        lastTargetWatts = t.watts
+
+        if (!isInteractive()) {
+            publishTelemetry(t, null, AutoTdpPause.SCREEN_OFF)
+            waitForWake(IDLE_WAIT_MS)
+            return
+        }
+
+        // 4 amostras ao longo de ~1 s (current_now é instantâneo). Sai mais cedo se o alvo mudar.
+        val samples = ArrayList<Float>(TDP_SAMPLES)
+        repeat(TDP_SAMPLES) {
+            readBatteryWatts()?.let { samples += it }
+            if (waitForWake(TDP_SAMPLE_INTERVAL_MS) && targets.get().mode != PerfMode.TDP) return
+        }
+        val current = targets.get()
+        if (current.mode != PerfMode.TDP) return
+
+        val measured = samples.takeIf { it.isNotEmpty() }?.average()?.toFloat()
+        val pause = when {
+            isExternallyPowered() -> AutoTdpPause.CHARGING
+            measured == null || measured < MIN_PLAUSIBLE_WATTS -> AutoTdpPause.NO_SENSOR
+            else -> null
+        }
+        val state = autoState!!
+        val next = if (pause == null) {
+            AutoTdpController.step(state, measured!!, current.watts, minRatio, readGpuBusy())
+        } else {
+            // A carregar (ou sem leitura válida) a bateria não mede o consumo do aparelho:
+            // mantém os tetos em que o loop estava em vez de os empurrar para o máximo.
+            state
+        }
+        autoState = next
+
+        val gpuMax = gpu.maxHz ?: Long.MAX_VALUE
+        val gpuTarget = if (gpuMax == Long.MAX_VALUE) gpuMax else (gpuMax * next.gpuRatio).toLong()
+        enforce(next.cpuRatio, next.cpuRatio, gpuTarget, minRatio)
+        publishTelemetry(current, measured, pause)
+    }
+
+    private fun publishTelemetry(t: PerfTargets, measured: Float?, pause: AutoTdpPause?) {
+        val s = autoState
+        _autoTdp.value = AutoTdpTelemetry(
+            active = true,
+            targetWatts = t.watts,
+            measuredWatts = s?.filteredWatts ?: measured,
+            cpuPercent = ((s?.cpuRatio ?: 1f) * 100).toInt(),
+            gpuPercent = ((s?.gpuRatio ?: 1f) * 100).toInt(),
+            paused = pause,
+        )
+    }
+
+    /** Espera por uma mudança de alvo, até [timeoutMs] (`null` = sem limite). `true` = acordado. */
+    private suspend fun waitForWake(timeoutMs: Long?): Boolean =
+        if (timeoutMs == null) {
+            wake.receive()
+            true
+        } else {
+            withTimeoutOrNull(timeoutMs) { wake.receive() } != null
+        }
+
+    // ------------------------------------------------------------------ escrita
+
+    private fun enforce(perfRatio: Float, primeRatio: Float, gpuHz: Long, minRatio: Float) {
+        if (policies.isEmpty()) policies = scanCpuPolicies()
+        val ops = ArrayList<HardwareWriteOp>()
+        val cpuOps = PerformanceCommandBuilder.buildCpuFrequencyOps(policies, perfRatio, primeRatio, minRatio)
+        ops += cpuOps
+
+        // Pisos do firmware: no Thor/RP6 o `pservice` sobe `scaling_min_freq` conforme o modo de
+        // desempenho (no "Alto Desempenho" o piso É o máximo de fábrica) e um teto abaixo do piso
+        // não pega. Só baixamos o piso quando ele está acima do nosso teto, e sem o trancar.
+        cpuOps.forEach { op ->
+            val minPath = op.targetPath.replace("scaling_max_freq", "scaling_min_freq")
+            val currentMin = readLocal(minPath)?.toLongOrNull() ?: return@forEach
+            val target = op.value.toLongOrNull() ?: return@forEach
+            if (currentMin > target) ops += HardwareWriteOp(op.label + "-min", minPath, op.value, lockMode = null)
+        }
+
+        gpu.opFor(gpuHz, HardwareWriteOp.LOCKED_MODE)?.let { ops += it }
+
+        val failures = ops.mapNotNull { op ->
+            runCatching { applyWriteOp(op) }.getOrElse {
+                Log.w(TAG, "enforce: ${op.label}", it)
+                null
+            }
+        }.filterNot { it.ok }
+        _lastApplyStatus.value = failures
+
+        if (ppmAvailable) applyPpmLimits(cpuOps)
+        appliedTargets = targets.get()
+    }
+
+    /**
+     * MediaTek: o PPM/FPSGO pode passar por cima de `scaling_max_freq`. O teto que o PPM respeita
+     * é `hard_userlimit_max_cpu_freq` ("<cluster> <kHz>"). Este nó não se lê de volta no mesmo
+     * formato, por isso só escrevemos quando o valor muda.
+     */
+    private fun applyPpmLimits(cpuOps: List<HardwareWriteOp>) {
+        val sorted = policies.sortedBy { it.cpuinfoMaxFreqKHz }
+        cpuOps.forEach { op ->
+            val cluster = sorted.indexOfFirst { op.targetPath.startsWith(it.policyPath + "/") }
+            if (cluster < 0) return@forEach
+            val value = "$cluster ${op.value}"
+            if (lastPpm[op.targetPath] == value) return@forEach
+            executor.executeAsRoot("echo $value > $PPM_HARD_LIMIT")
+            lastPpm[op.targetPath] = value
+        }
+    }
+
+    /** Stock: máximos escritos uma vez, permissões devolvidas, nós entregues ao sistema. */
+    private fun applyStockOnce() {
+        lastResults.clear()
+        backoffUntil.clear()
+        val ops = ArrayList<HardwareWriteOp>()
+        policies.forEach { node ->
+            val path = "${node.policyPath}/scaling_max_freq"
+            ops += HardwareWriteOp("cpu-stock", path, node.cpuinfoMaxFreqKHz.toString(), restoreModeFor(path))
+        }
+        gpu.maxHz?.let { max ->
+            when (val g = gpu) {
+                is GpuControl.Kgsl -> g.opFor(max, restoreModeFor(GpuControl.Kgsl.MAX_PATH))?.let { ops += it }
+                is GpuControl.MtkGed -> ops += HardwareWriteOp("gpu-upbound-opp", GpuControl.MtkGed.UPBOUND_PATH, "0", lockMode = null, verify = false)
+                GpuControl.None -> Unit
+            }
+        }
+        val failures = ops.mapNotNull { op -> runCatching { applyWriteOp(op, force = op.lockMode != null) }.getOrNull() }.filterNot { it.ok }
+        _lastApplyStatus.value = failures
+        if (ppmAvailable) {
+            policies.sortedBy { it.cpuinfoMaxFreqKHz }.forEachIndexed { cluster, node ->
+                executor.executeAsRoot("echo $cluster ${node.cpuinfoMaxFreqKHz} > $PPM_HARD_LIMIT")
+            }
+            lastPpm.clear()
+        }
+        appliedTargets = targets.get()
+    }
+
+    /**
+     * Permissão a repor num nó ao voltar a Stock: se ficou trancado (0444) por nós -- nesta sessão
+     * ou numa anterior que morreu -- devolve-lhe o modo do sistema; se não, não mexe.
+     */
+    private fun restoreModeFor(path: String): String? {
+        val mode = runCatching { Os.stat(path).st_mode and 0x1FF }.getOrNull() ?: return null
+        return if (mode == 0x124 /* 0444 */) HardwareWriteOp.DEFAULT_RESTORE_MODE else null
+    }
+
+    /** Permissões atuais do nó em octal ("664"), ou `null` se não der para ler. */
+    private fun currentModeOf(path: String): String? =
+        runCatching { Integer.toOctalString(Os.stat(path).st_mode and 0x1FF) }.getOrNull()?.takeIf { it.length == 3 }
+
+    /**
+     * Aplica uma escrita só se for preciso, com verificação e recuo:
+     *  0. Lê o nó (leitura direta, sem root). Já tem o valor -> nada a fazer, zero binder.
+     *  1. Cadeia `chmod && echo && chmod` numa transação; verifica com [isWriteApplied].
+     *  2. Se não pegou, os passos como transações separadas (backends sem `sh -c`).
+     *  3. Ainda abaixo do pedido e sem mexer: o kernel está a limitar (térmico/QoS) -- não é
+     *     falha da app; lembramos o resultado para não reescrever a cada tick.
+     *  Falhas reais entram em espera ([BACKOFF_MS]) em vez de repetirem 8 transações por segundo.
+     */
+    private fun applyWriteOp(requestedOp: HardwareWriteOp, force: Boolean = false): HardwareNodeStatus {
+        val now = System.currentTimeMillis()
+        // "Não mexer nas permissões" = desbloquear, escrever e devolver o modo que o nó TINHA
+        // (e não deixá-lo a 0666, nem trancá-lo a 0444).
+        val op = if (requestedOp.lockMode == null) requestedOp.copy(lockMode = currentModeOf(requestedOp.targetPath) ?: HardwareWriteOp.DEFAULT_RESTORE_MODE) else requestedOp
+        val path = op.targetPath
+        if (!op.verify) return applyUnverified(op, force, now)
+        val before = readValue(path)
+        if (before == op.value && !force) return record(HardwareNodeStatus(op.label, path, op.value, before, ok = true), now)
+
+        val requested = op.value.toLongOrNull()
+        val beforeNum = before?.toLongOrNull()
+        val cached = lastResults[path]
+        if (!force && cached != null && cached.first.ok && cached.first.requestedValue == op.value &&
+            requested != null && beforeNum != null && beforeNum < requested && now - cached.second < REASSERT_MS
+        ) {
+            return cached.first // aplicado há pouco e o kernel mantém-no mais abaixo
+        }
+        val until = backoffUntil[path]
+        if (cached != null && until != null && now < until && cached.first.requestedValue == op.value) return cached.first
+
+        executor.executeAsRoot(op.asChainedCommand())
+        var after = readValue(path)
+        if (isWriteApplied(op.value, before, after) || (!op.isNumeric && after == op.value)) {
+            return record(HardwareNodeStatus(op.label, path, op.value, after, ok = true), now)
+        }
+
+        op.asSequentialCommands().forEach { executor.executeAsRoot(it) }
+        after = readValue(path)
+        val afterNum = after?.toLongOrNull()
+        val ok = isWriteApplied(op.value, before, after) ||
+            (!op.isNumeric && after == op.value) ||
+            // Abaixo do pedido mesmo assim: limite térmico/QoS do kernel, não falha da escrita.
+            (requested != null && afterNum != null && afterNum < requested) ||
+            // Nó que não se lê de volta (sem captura e sem leitura direta): não há como verificar.
+            (after == null && !executor.outputCaptureWorks)
+
+        val status = HardwareNodeStatus(op.label, path, op.value, after, ok)
+        if (!ok) {
+            backoffUntil[path] = now + BACKOFF_MS
+            Log.w(TAG, "applyWriteOp: falha em ${op.label} ($path): pedido=${op.value} antes=$before depois=$after")
+        }
+        return record(status, now)
+    }
+
+    /** Nós sem leitura de volta fiável: escreve só quando o valor pedido muda. */
+    private fun applyUnverified(op: HardwareWriteOp, force: Boolean, now: Long): HardwareNodeStatus {
+        val cached = lastResults[op.targetPath]
+        if (!force && cached != null && cached.first.requestedValue == op.value) return cached.first
+        val ok = executor.executeAsRoot(op.asChainedCommand()).isSuccess
+        return record(HardwareNodeStatus(op.label, op.targetPath, op.value, null, ok), now)
+    }
+
+    private fun record(status: HardwareNodeStatus, now: Long): HardwareNodeStatus {
+        lastResults[status.path] = status to now
+        if (status.ok) backoffUntil.remove(status.path)
+        return status
+    }
+
+    private val HardwareWriteOp.isNumeric: Boolean get() = value.toLongOrNull() != null
+
+    // ------------------------------------------------------------------ leitura
+
+    /** Leitura direta (os nós de cpufreq/kgsl são legíveis por qualquer app); root só se falhar. */
+    private fun readValue(path: String): String? =
+        readLocal(path) ?: if (executor.outputCaptureWorks) executor.executeAsRoot("cat $path").getOrNull()?.trim() else null
+
+    private fun readLocal(path: String): String? = runCatching { File(path).readText().trim() }.getOrNull()?.takeIf { it.isNotEmpty() }
+
+    private fun parseFreqList(raw: String?): List<Long> =
+        raw.orEmpty().trim().split(Regex("\\s+")).mapNotNull { it.toLongOrNull() }.filter { it > 0 }.distinct().sorted()
+
+    private fun readBatteryWatts(): Float? {
+        val current = readLocal("$BATTERY/current_now")?.toLongOrNull() ?: return null
+        val voltage = readLocal("$BATTERY/voltage_now")?.toLongOrNull() ?: return null
+        return AutoTdpController.batteryWatts(current, voltage).takeIf { it > 0f }
+    }
+
+    /**
+     * A bateria só mede o consumo do aparelho quando é ELA a alimentá-lo. A carregar, cheia ou em
+     * "Not charging" (separação de carga / bypass ligado à corrente) a medição não serve.
+     */
+    private fun isExternallyPowered(): Boolean {
+        val status = readLocal("$BATTERY/status")?.lowercase() ?: return false
+        return status != "discharging" && status != "unknown"
+    }
+
+    private fun readGpuBusy(): Int? = gpu.busyPath?.let { gpu.parseBusy(readLocal(it)) }
+
+    private fun isInteractive(): Boolean = powerManager?.isInteractive ?: true
 
     private companion object {
         const val TAG = "PerformanceManager"
+        const val CPUFREQ_ROOT = "/sys/devices/system/cpu/cpufreq"
+        const val BATTERY = "/sys/class/power_supply/battery"
+        const val PPM_HARD_LIMIT = "/proc/ppm/policy/hard_userlimit_max_cpu_freq"
 
-        /** Valores do 8 Elite, usados só quando nem o kernel nem a tabela por SoC respondem. */
-        const val DEFAULT_GPU_MAX_HZ = 1_100_000_000L
-        const val DEFAULT_GPU_MIN_HZ = 160_000_000L
+        const val TDP_SAMPLES = 4
+
+        /** Mudança relativa de alvo a partir da qual o AutoTDP recomeça da estimativa inicial. */
+        const val BIG_TARGET_CHANGE = 0.15f
+        const val TDP_SAMPLE_INTERVAL_MS = 250L
+
+        /** Abaixo disto a "medição" é ruído (ou o aparelho está ligado à corrente). */
+        const val MIN_PLAUSIBLE_WATTS = 0.5f
+
+        const val CLOCKS_REASSERT_MS = 5_000L
+        const val IDLE_WAIT_MS = 15_000L
+        const val REASSERT_MS = 30_000L
+        const val BACKOFF_MS = 30_000L
     }
 }

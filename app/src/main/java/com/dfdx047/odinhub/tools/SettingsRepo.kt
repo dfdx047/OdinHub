@@ -1,11 +1,15 @@
 package com.dfdx047.odinhub.tools
 
 import android.content.ComponentName
+import android.content.Context
+import android.provider.Settings
 import com.dfdx047.odinhub.BuildConfig
 import com.dfdx047.odinhub.service.ForegroundAppWatcherService
+import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 
 class SettingsRepo @Inject constructor(
+    @ApplicationContext private val context: Context,
     private val executor: ShellExecutor,
 ) {
 
@@ -40,17 +44,21 @@ class SettingsRepo @Inject constructor(
         val component = ComponentName(PACKAGE, ForegroundAppWatcherService::class.java.name)
             .flattenToString()
 
-        val currentServices =
-            executor.executeAsRoot("settings get secure $KEY_ACCESSIBILITY_SERVICES")
-                .map { it ?: "" }
-                .getOrDefault("")
-                .let { if (it == "null") "" else it }
+        // Leitura pela API pública (não precisa de root). Pelo PServer, num firmware sem captura
+        // de saída (ver ShellExecutor.outputCaptureWorks) a leitura vinha vazia e a escrita abaixo
+        // apagava os serviços de acessibilidade das outras apps.
+        val currentServices = runCatching {
+            Settings.Secure.getString(context.contentResolver, KEY_ACCESSIBILITY_SERVICES)
+        }.getOrNull().orEmpty().let { if (it == "null") "" else it }
 
         if (!currentServices.contains(component)) {
             val updated = listOf(component, currentServices)
                 .filter { it.isNotBlank() }
                 .joinToString(":")
-            executor.executeAsRoot("settings put secure $KEY_ACCESSIBILITY_SERVICES $updated")
+            // Entre aspas: nomes de componentes podem ter `$` (classes aninhadas, `Outer$Service`)
+            // e, sem aspas, o shell expandia-os e corrompia os serviços de acessibilidade de
+            // OUTRAS apps a cada arranque.
+            executor.executeAsRoot("settings put secure $KEY_ACCESSIBILITY_SERVICES ${shellQuote(updated)}")
         }
 
         // O interruptor geral. Sem isto, a lista acima é ignorada.
@@ -62,14 +70,12 @@ class SettingsRepo @Inject constructor(
     }
 
     private fun addOdinHubToWhitelist() {
+        // Sem captura de saída a leitura vem vazia e a escrita apagaria a lista do sistema.
+        if (!executor.outputCaptureWorks) return
         val currentWhitelist = whitelist
         if (currentWhitelist.contains(PACKAGE)) return
         val newWhitelist = "$PACKAGE,$currentWhitelist".trimEnd(',')
         whitelist = newWhitelist
-    }
-
-    fun setSfSaturation(value: Float) {
-        executor.executeAsRoot("service call SurfaceFlinger 1022 f ${String.format("%.1f", value)}")
     }
 
     fun enableChargingSeparation() {

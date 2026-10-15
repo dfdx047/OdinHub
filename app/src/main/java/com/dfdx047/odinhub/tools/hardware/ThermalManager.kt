@@ -2,6 +2,8 @@ package com.dfdx047.odinhub.tools.hardware
 
 import android.util.Log
 import com.dfdx047.odinhub.data.SharedPrefsRepo
+import com.dfdx047.odinhub.models.ThermalPolicy
+import com.dfdx047.odinhub.tools.DeviceRegistry
 import com.dfdx047.odinhub.tools.ShellExecutor
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -48,6 +50,8 @@ data class ThermalStatus(
     val tripCount: Int = 0,
     val pServerAvailable: Boolean = false,
     val discovered: Boolean = false,
+    /** `false` em aparelhos onde o throttling não passa pelos trip points (MediaTek). */
+    val supported: Boolean = true,
     /** Código do último erro (ver [ThermalManager.ERR_*]) -- a UI traduz; `null` = tudo bem. */
     val lastError: String? = null,
     /** Detalhe do erro (nós que falharam, mensagem da exceção), para diagnóstico. */
@@ -108,6 +112,13 @@ class ThermalManager @Inject constructor(
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var reapplyJob: Job? = null
 
+    /** Que trips este SoC deixa mexer (ver ThermalPolicy / DeviceProfiles). */
+    private val policy: ThermalPolicy = DeviceRegistry.current.thermal
+
+    /** `false` até à primeira chamada de [setAppOverride] neste processo. */
+    @Volatile
+    private var overrideSeen = false
+
     private val _status = MutableStateFlow(ThermalStatus(mode = prefs.thermalLimitMode, activeMode = prefs.thermalLimitMode, disableZoneMode = prefs.thermalDisableZoneMode))
 
     /**
@@ -140,8 +151,17 @@ class ThermalManager @Inject constructor(
      * Varre /sys/class/thermal e guarda as zonas CPU/GPU com os seus trip points passivos.
      * Segura contra tudo: nós ilegíveis, diretórios vazios, valores não numéricos.
      */
+    @Synchronized
     fun discover(): List<ThermalZone> {
         val found = mutableListOf<ThermalZone>()
+        if (!policy.supported) {
+            zones = emptyList()
+            _status.update { it.copy(supported = false, discovered = true, pServerAvailable = pServerAvailable) }
+            return found
+        }
+        // Backup de um boot anterior não serve de referência (ver dropBackupsFromPreviousBoot).
+        dropBackupsFromPreviousBoot()
+        val factory = backupMap()
         try {
             val zoneDirs = listDir(THERMAL_ROOT).filter { it.startsWith("thermal_zone") }
             for (zoneName in zoneDirs) {
@@ -150,14 +170,23 @@ class ThermalManager @Inject constructor(
                 if (!ZONE_TYPE_PATTERN.containsMatchIn(type)) continue
 
                 val entries = listDir(zonePath)
+                val fanTrips = fanTripIndices(zonePath, entries)
                 val trips = entries
                     .mapNotNull { TRIP_TYPE_PATTERN.matchEntire(it)?.groupValues?.get(1)?.toIntOrNull() }
                     .sorted()
+                    .filter { it !in fanTrips }
                     .mapNotNull { index ->
                         val tripType = readNode("$zonePath/trip_point_${index}_type") ?: return@mapNotNull null
                         if (!tripType.equals("passive", ignoreCase = true)) return@mapNotNull null
                         val tempPath = "$zonePath/trip_point_${index}_temp"
-                        ThermalTrip(tempPath = tempPath, originalMilliC = readNode(tempPath)?.toIntOrNull())
+                        // O valor de FÁBRICA vem do backup quando já mexemos neste boot: lido do
+                        // nó, um trip que pusemos a 85 °C ficava abaixo do mínimo deste SoC e
+                        // desaparecia da lista -- e os modos seguintes nunca mais lhe tocavam.
+                        val original = factory[tempPath] ?: readNode(tempPath)?.toIntOrNull()
+                        // Trips abaixo do mínimo deste SoC são da ventoinha/conforto, não de
+                        // throttling (ex: 50-85 °C nos 8 Gen 2 da Moorechip). Não lhes tocamos.
+                        if ((original ?: 0) < policy.minOriginalMilliC) return@mapNotNull null
+                        ThermalTrip(tempPath = tempPath, originalMilliC = original)
                     }
                 found.add(ThermalZone(path = zonePath, type = type, passiveTrips = trips))
             }
@@ -212,16 +241,29 @@ class ThermalManager @Inject constructor(
         val safe = mode?.takeIf { it in ThermalLimitModes.all }
         val changed = safe != appOverrideMode
         appOverrideMode = safe
-        if (!changed) return
+        // A primeira chamada do processo aplica SEMPRE: se o processo morreu a meio de um jogo
+        // com uma regra "Unthrottled", os trips ficaram a 115 °C em sysfs e o `null` que chega
+        // agora parecia "sem alteração" -- nada os repunha até ao reboot.
+        val first = !overrideSeen
+        overrideSeen = true
+        if (!changed && !first && !prefs.thermalOverrideActive) return
+        prefs.thermalOverrideActive = safe != null
         _status.update { it.copy(activeMode = effectiveMode, fromAppOverride = safe != null) }
-        // Se nunca mexemos em nada (global Stock e sem backup), voltar ao global não escreve.
-        if (safe == null && prefs.thermalLimitMode == ThermalLimitModes.STOCK && prefs.thermalTripBackup == null && !prefs.thermalDisableZoneMode) return
+        if (safe == null && !hasAnythingToRestore()) return
         scope.launch { applyCurrent() }
     }
 
-    /** Reaplica o que está persistido (arranque da app e BootReceiver). Sem efeito em Stock. */
+    /** Há trips/modos modificados por nós (backup guardado) ou uma escolha não-Stock em vigor? */
+    private fun hasAnythingToRestore(): Boolean =
+        prefs.thermalLimitMode != ThermalLimitModes.STOCK || prefs.thermalTripBackup != null ||
+            prefs.thermalModeBackup != null || prefs.thermalDisableZoneMode
+
+    /**
+     * Reaplica o que está persistido (arranque da app e BootReceiver). Em Stock só faz alguma
+     * coisa se houver um backup -- ou seja, se algo pode ter ficado modificado.
+     */
     fun reapplyPersisted() {
-        if (effectiveMode == ThermalLimitModes.STOCK && !prefs.thermalDisableZoneMode) return
+        if (effectiveMode == ThermalLimitModes.STOCK && !hasAnythingToRestore()) return
         applyCurrent()
     }
 
@@ -251,11 +293,16 @@ class ThermalManager @Inject constructor(
             _status.update { it.copy(pServerAvailable = false, lastError = ERR_NO_PSERVER, lastErrorDetail = null) }
             return
         }
+        if (!policy.supported) {
+            _status.update { it.copy(supported = false, lastError = null, lastErrorDetail = null) }
+            return
+        }
         if (zones.isEmpty()) discover()
         if (zones.isEmpty()) {
             _status.update { it.copy(lastError = ERR_NO_ZONES, lastErrorDetail = null) }
             return
         }
+        dropBackupsFromPreviousBoot()
 
         val failures = mutableListOf<String>()
         val targetMilliC = ThermalLimitModes.tripMilliC(mode)
@@ -293,18 +340,56 @@ class ThermalManager @Inject constructor(
      */
     private fun backupTripsIfNeeded() {
         if (prefs.thermalTripBackup != null) return
-        val json = JSONObject()
+        val trips = JSONObject()
         zones.forEach { zone ->
             zone.passiveTrips.forEach { trip ->
-                val original = trip.originalMilliC ?: readNode(trip.tempPath)?.toIntOrNull()
-                if (original != null) json.put(trip.tempPath, original)
+                // Lê o valor ATUAL: depois de um reboot (ver dropBackupsFromPreviousBoot) é o de
+                // fábrica. Nunca guardamos o nosso próprio "Unthrottled" como se fosse de fábrica.
+                val current = readNode(trip.tempPath)?.toIntOrNull() ?: trip.originalMilliC
+                if (current != null && current != ThermalLimitModes.UNTHROTTLED_MILLI_C) {
+                    trips.put(trip.tempPath, JSONObject().put(KEY_VALUE, current).put(KEY_TYPE, zone.type))
+                }
             }
         }
-        if (json.length() > 0) {
-            prefs.thermalTripBackup = json.toString()
-            Log.i(TAG, "backupTripsIfNeeded: ${json.length()} trips guardados")
+        if (trips.length() > 0) {
+            stampBootId()
+            prefs.thermalTripBackup = JSONObject().put(KEY_TRIPS, trips).toString()
+            Log.i(TAG, "backupTripsIfNeeded: ${trips.length()} trips guardados")
         }
     }
+
+    /**
+     * Um backup de um boot anterior já não serve: sysfs volta aos valores de fábrica a cada boot
+     * (e uma atualização do firmware pode mudar esses valores ou a numeração das zonas). Sem isto,
+     * um backup apanhado com trips já modificados (ex: reinstalação da app sem reboot) ficava a
+     * "repor" 115 °C para sempre.
+     */
+    private fun dropBackupsFromPreviousBoot() {
+        val bootId = currentBootId() ?: return
+        val stamped = prefs.thermalBackupBootId
+        if (stamped == null) {
+            // Backup de uma versão antiga da app (sem boot id): adota-o neste boot.
+            if (prefs.thermalTripBackup != null || prefs.thermalModeBackup != null) prefs.thermalBackupBootId = bootId
+            return
+        }
+        if (stamped != bootId) {
+            Log.i(TAG, "dropBackupsFromPreviousBoot: reboot desde o último backup, a descartar")
+            prefs.thermalTripBackup = null
+            prefs.thermalModeBackup = null
+            prefs.thermalBackupBootId = null
+        }
+    }
+
+    private fun stampBootId() {
+        currentBootId()?.let { prefs.thermalBackupBootId = it }
+    }
+
+    /** O nó ficou trancado (0444) por uma escrita nossa? */
+    private fun isLocked(path: String): Boolean =
+        runCatching { (android.system.Os.stat(path).st_mode and 0x1FF) == 0x124 }.getOrDefault(false)
+
+    private fun currentBootId(): String? =
+        runCatching { File(BOOT_ID_PATH).readText().trim() }.getOrNull()?.takeIf { it.isNotEmpty() }
 
     /**
      * Escreve o novo limite SÓ onde faz sentido. No 8 Elite cada zona de CPU/GPU tem dois trips
@@ -326,33 +411,43 @@ class ThermalManager @Inject constructor(
         return failures
     }
 
-    private fun backupMap(): Map<String, Int> {
+    /** Entrada do backup: valor de fábrica e o `type` da zona (para não escrever na zona errada). */
+    private data class TripBackup(val value: Int, val type: String?)
+
+    /** Lê o backup -- formato novo `{"trips": {caminho: {"v":.., "t":..}}}` ou o antigo `{caminho: valor}`. */
+    private fun backupEntries(): Map<String, TripBackup>? {
         val raw = prefs.thermalTripBackup ?: return emptyMap()
-        val json = runCatching { JSONObject(raw) }.getOrNull() ?: return emptyMap()
-        val out = mutableMapOf<String, Int>()
-        val keys = json.keys()
+        val json = runCatching { JSONObject(raw) }.getOrNull() ?: return null
+        val trips = json.optJSONObject(KEY_TRIPS) ?: json
+        val out = mutableMapOf<String, TripBackup>()
+        val keys = trips.keys()
         while (keys.hasNext()) {
-            val k = keys.next()
-            val v = json.optInt(k, -1)
-            if (v > 0) out[k] = v
+            val path = keys.next()
+            val entry = trips.optJSONObject(path)
+            val value = entry?.optInt(KEY_VALUE, -1) ?: trips.optInt(path, -1)
+            if (value > 0) out[path] = TripBackup(value, entry?.optString(KEY_TYPE)?.takeIf { it.isNotEmpty() })
         }
         return out
     }
 
+    private fun backupMap(): Map<String, Int> = backupEntries().orEmpty().mapValues { it.value.value }
+
+    /** O `type` atual da zona dona deste caminho (`.../thermal_zoneN/trip_point_M_temp`). */
+    private fun zoneTypeOf(path: String): String? = readNode(path.substringBeforeLast('/') + "/type")
+
         /** Repõe as temperaturas do backup. Sem backup não há nada a repor (nunca foi modificado). */
     private fun restoreTrips(): List<String> {
-        val raw = prefs.thermalTripBackup ?: return emptyList()
-        val failures = mutableListOf<String>()
-        val json = runCatching { JSONObject(raw) }.getOrElse {
-            Log.w(TAG, "restoreTrips: backup ilegível", it)
+        if (prefs.thermalTripBackup == null) return emptyList()
+        val entries = backupEntries() ?: run {
+            Log.w(TAG, "restoreTrips: backup ilegível")
+            prefs.thermalTripBackup = null
             return listOf("thermalTripBackup")
         }
-        val keys = json.keys()
-        while (keys.hasNext()) {
-            val path = keys.next()
-            val value = json.optInt(path, -1)
-            if (value <= 0) continue
-            if (!writeVerified(path, value.toString())) failures += path.substringAfterLast('/')
+        val failures = mutableListOf<String>()
+        entries.forEach { (path, backup) ->
+            // A zona mudou de número desde o backup? Então este caminho é OUTRA zona: não tocar.
+            if (backup.type != null && zoneTypeOf(path) != backup.type) return@forEach
+            if (!writeVerified(path, backup.value.toString(), restoring = true)) failures += path.substringAfterLast('/')
         }
         return failures
     }
@@ -360,8 +455,12 @@ class ThermalManager @Inject constructor(
     private fun backupModesIfNeeded() {
         if (prefs.thermalModeBackup != null) return
         val json = JSONObject()
-        zones.forEach { zone -> readNode(zone.modePath)?.let { json.put(zone.modePath, it) } }
-        if (json.length() > 0) prefs.thermalModeBackup = json.toString()
+        // "disabled" nunca é de fábrica numa zona que vamos desativar -- seria o nosso próprio valor.
+        zones.forEach { zone -> readNode(zone.modePath)?.takeIf { it != "disabled" }?.let { json.put(zone.modePath, it) } }
+        if (json.length() > 0) {
+            stampBootId()
+            prefs.thermalModeBackup = json.toString()
+        }
     }
 
     /** Repõe os `mode` guardados; sem backup não há nada a repor (nunca foram alterados). */
@@ -373,7 +472,7 @@ class ThermalManager @Inject constructor(
         while (keys.hasNext()) {
             val path = keys.next()
             val value = json.optString(path, "")
-            if (value.isNotEmpty() && !writeVerified(path, value)) failures += path.substringAfterLast("thermal/")
+            if (value.isNotEmpty() && !writeVerified(path, value, restoring = true)) failures += path.substringAfterLast("thermal/")
         }
         if (failures.isEmpty()) prefs.thermalModeBackup = null
         return failures
@@ -394,9 +493,12 @@ class ThermalManager @Inject constructor(
      * clocks) com verificação por leitura. Se o valor já for o pedido, não escreve nada -- é o
      * que torna o loop de 30 s barato quando o daemon do fabricante não mexeu em nada.
      */
-    private fun writeVerified(path: String, value: String): Boolean {
-        if (readNode(path) == value) return true
-        val op = PerformanceCommandBuilder.buildWriteOp(label = path.substringAfterLast('/'), path = path, value = value)
+    private fun writeVerified(path: String, value: String, restoring: Boolean = false): Boolean {
+        if (readNode(path) == value && !(restoring && isLocked(path))) return true
+        // Ao repor (Stock), o nó volta às permissões do sistema em vez de ficar trancado a 0444
+        // -- senão o serviço térmico do fabricante deixava de o poder ajustar.
+        val lock = if (restoring) HardwareWriteOp.DEFAULT_RESTORE_MODE else HardwareWriteOp.LOCKED_MODE
+        val op = HardwareWriteOp(label = path.substringAfterLast('/'), targetPath = path, value = value, lockMode = lock)
         executor.executeAsRoot(op.asChainedCommand())
         if (readNodeAsRoot(path) == value) return true
         op.asSequentialCommands().forEach { executor.executeAsRoot(it) }
@@ -404,6 +506,20 @@ class ThermalManager @Inject constructor(
     }
 
     // ------------------------------------------------------------------ leitura
+
+    /**
+     * Índices de trip ligados a uma VENTOINHA (`cdevN/type` contém "fan", ex: "pwm-fan"). São
+     * trips passivos mas não fazem throttling -- só decidem quando a ventoinha acelera. Leitura
+     * direta só (sem root): se não for legível, a proteção por temperatura mínima ainda vale.
+     */
+    private fun fanTripIndices(zonePath: String, entries: List<String>): Set<Int> =
+        entries.mapNotNull { CDEV_TRIP_PATTERN.matchEntire(it)?.groupValues?.get(1) }
+            .mapNotNull { n ->
+                val type = runCatching { File("$zonePath/cdev$n/type").readText().trim() }.getOrNull()
+                if (type?.contains("fan", ignoreCase = true) != true) return@mapNotNull null
+                runCatching { File("$zonePath/cdev${n}_trip_point").readText().trim().toInt() }.getOrNull()
+            }
+            .toSet()
 
     private fun listDir(path: String): List<String> {
         val local = runCatching { File(path).list()?.toList() }.getOrNull()
@@ -462,6 +578,11 @@ class ThermalManager @Inject constructor(
         const val SECOND_STAGE_MILLI_C = 110_000
 
         const val THERMAL_ROOT = "/sys/class/thermal"
+        const val BOOT_ID_PATH = "/proc/sys/kernel/random/boot_id"
+        private const val KEY_TRIPS = "trips"
+        private const val KEY_VALUE = "v"
+        private const val KEY_TYPE = "t"
+        private val CDEV_TRIP_PATTERN = Regex("cdev(\\d+)_trip_point")
         const val REAPPLY_INTERVAL_MS = 30_000L
 
         /** Tipos de zona que interessam (CPU/GPU e os nomes que a Qualcomm lhes dá). */

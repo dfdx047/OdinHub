@@ -91,6 +91,10 @@ class BootReceiver : BroadcastReceiver() {
                         Log.w(TAG, "Overlay não pôde arrancar no boot (será iniciado ao abrir a app)", it)
                     }
                 }
+            } catch (t: Throwable) {
+                // Uma exceção inesperada aqui (dentro do goAsync, no arranque do sistema) derrubava
+                // o processo inteiro durante o boot. Regista e segue.
+                Log.e(TAG, "onReceive(${intent.action}) falhou", t)
             } finally {
                 pendingResult.finish()
             }

@@ -36,7 +36,7 @@ data class AppOverrideUiState(
     // reformulação este ecrã tinha o seu próprio esquema de exclusividade ("Nenhum" bloqueia o
     // outro cartão), incompatível com o resto da app.
     val limitMode: String = "TDP",
-    val tdpWatts: Float = 15f,
+    val tdpWatts: Float = TdpProfiles.envelope.tripleA,
     /** Perfil de TDP selecionado (ver TdpProfiles); "custom" = o valor livre do slider. */
     val tdpProfileId: String = TdpProfiles.ID_TRIPLE_A,
     val perfClockMHz: Float = 3530f,
@@ -88,8 +88,15 @@ class AppOverrideViewModel @Inject constructor(
     private val overrideRepository: AppOverrideRepository,
     private val prefs: SharedPrefsRepo,
     performanceManager: PerformanceManager,
+    deviceCapabilities: com.dfdx047.odinhub.tools.DeviceCapabilities,
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
+
+    /** Botões M1/M2 remapeáveis neste aparelho? (o cartão das macros só aparece se sim) */
+    val hasBackButtons: StateFlow<Boolean> = deviceCapabilities.backButtons
+
+    /** O limite térmico funciona neste aparelho? (não no MediaTek -- ver DeviceProfiles) */
+    val thermalSupported: Boolean = com.dfdx047.odinhub.tools.DeviceRegistry.current.thermal.supported
 
     private val _uiState = MutableStateFlow(AppOverrideUiState())
     val uiState: StateFlow<AppOverrideUiState> = _uiState.asStateFlow()
@@ -115,6 +122,18 @@ class AppOverrideViewModel @Inject constructor(
                 packageName = packageName,
                 selectedThemeIndex = prefs.selectedThemeIndex,
                 useAmoledBlack = prefs.useAmoledBlack,
+                // Uma regra NOVA parte do perfil GLOBAL (como o overlay já fazia), não de valores
+                // fixos: antes, criar uma regra só para mudar o limite térmico gravava também
+                // "TDP 15 W" e passava a limitar o jogo sem o utilizador ter tocado no TDP.
+                // Se o jogo já tiver regra, observeOverride() substitui isto pelos valores dela.
+                limitMode = prefs.activeLimitMode,
+                tdpWatts = prefs.tdpValue,
+                tdpProfileId = prefs.tdpProfileId,
+                perfClockMHz = prefs.cpuPerfClock,
+                primeClockMHz = prefs.cpuPrimeClock,
+                gpuClockMHz = prefs.gpuClock,
+                saturationOverride = prefs.saturationOverride,
+                temperatureOverride = prefs.temperatureOverride,
             )
         }
 

@@ -94,10 +94,11 @@ class SharedPrefsRepo @Inject constructor(
     }
     /** Mapeamento nativo que estava no botão antes de a macro o substituir pela tecla-gatilho. */
     fun macroNativeBackup(button: String): Int = prefs.getInt("macro_${button}_native_backup", -1)
-    fun setMacroNativeBackup(button: String, keyCode: Int) { prefs.edit().putInt("macro_${button}_native_backup", keyCode).apply() }
+    fun setMacroNativeBackup(button: String, keyCode: Int) { prefs.edit().putInt("macro_${button}_native_backup", keyCode).commit() }
 
     var activeLimitMode: String get() = prefs.getString("active_limit_mode", "TDP") ?: "TDP"; set(value) = prefs.edit().putString("active_limit_mode", value).apply()
-    var tdpValue: Float get() = prefs.getFloat("tdp_value", 15f); set(value) = prefs.edit().putFloat("tdp_value", value).apply()
+    /** Slider de TDP. Por omissão o "Triple A" do aparelho atual (15 W no Odin 3, 11 W num Odin 2...). */
+    var tdpValue: Float get() = prefs.getFloat("tdp_value", TdpProfiles.envelope.tripleA); set(value) = prefs.edit().putFloat("tdp_value", value).apply()
 
     /**
      * Perfil de TDP selecionado ("power_save" | "balanced" | "triple_a" | "stock" | "custom" --
@@ -114,13 +115,24 @@ class SharedPrefsRepo @Inject constructor(
     // temperaturas originais dos trip points ANTES da primeira modificação, para o "Stock"
     // conseguir repô-las mesmo depois de um reboot da app.
     var thermalLimitMode: String get() = prefs.getString("thermal_limit_mode", "stock") ?: "stock"; set(value) = prefs.edit().putString("thermal_limit_mode", value).apply()
-    var thermalTripBackup: String? get() = prefs.getString("thermal_trip_backup", null); set(value) = prefs.edit().putString("thermal_trip_backup", value).apply()
+    // Os backups usam commit() (síncrono): têm de estar em disco ANTES da primeira escrita em
+    // sysfs. Com apply() um processo morto nessa janela perdia o backup com os trips já mexidos.
+    var thermalTripBackup: String? get() = prefs.getString("thermal_trip_backup", null); set(value) { prefs.edit().putString("thermal_trip_backup", value).commit() }
     /** Valores originais do nó `mode` de cada zona (JSON caminho->valor), guardados antes de os desativar. */
-    var thermalModeBackup: String? get() = prefs.getString("thermal_mode_backup", null); set(value) = prefs.edit().putString("thermal_mode_backup", value).apply()
+    var thermalModeBackup: String? get() = prefs.getString("thermal_mode_backup", null); set(value) { prefs.edit().putString("thermal_mode_backup", value).commit() }
+    /** `boot_id` do kernel no momento em que os backups térmicos foram tirados (ver ThermalManager). */
+    var thermalBackupBootId: String? get() = prefs.getString("thermal_backup_boot_id", null); set(value) { prefs.edit().putString("thermal_backup_boot_id", value).commit() }
+    /** Regra térmica por jogo ativa quando o processo morreu (para a desfazer no arranque seguinte). */
+    var thermalOverrideActive: Boolean get() = prefs.getBoolean("thermal_override_active", false); set(value) = prefs.edit().putBoolean("thermal_override_active", value).apply()
+    /** Valor de `fan_mode` do sistema antes de a app o mudar (-1 = nenhum guardado). */
+    var fanModeBackup: Int get() = prefs.getInt("fan_mode_backup", -1); set(value) { prefs.edit().putInt("fan_mode_backup", value).commit() }
     var thermalDisableZoneMode: Boolean get() = prefs.getBoolean("thermal_disable_zone_mode", false); set(value) = prefs.edit().putBoolean("thermal_disable_zone_mode", value).apply()
-    var cpuPerfClock: Float get() = prefs.getFloat("cpu_perf_clock", 3530f); set(value) = prefs.edit().putFloat("cpu_perf_clock", value).apply()
-    var cpuPrimeClock: Float get() = prefs.getFloat("cpu_prime_clock", 4320f); set(value) = prefs.edit().putFloat("cpu_prime_clock", value).apply()
-    var gpuClock: Float get() = prefs.getFloat("gpu_clock", 1100f); set(value) = prefs.edit().putFloat("gpu_clock", value).apply()
+    // Clocks manuais: por omissão o máximo do aparelho atual (antes eram os 3530/4320/1100 MHz
+    // do 8 Elite, que noutro SoC só "funcionavam" por serem cortados ao máximo).
+    var cpuPerfClock: Float get() = prefs.getFloat("cpu_perf_clock", defaultClocks.perfMHz.lastOrNull()?.toFloat() ?: 3530f); set(value) = prefs.edit().putFloat("cpu_perf_clock", value).apply()
+    var cpuPrimeClock: Float get() = prefs.getFloat("cpu_prime_clock", defaultClocks.primeMHz.lastOrNull()?.toFloat() ?: 4320f); set(value) = prefs.edit().putFloat("cpu_prime_clock", value).apply()
+    var gpuClock: Float get() = prefs.getFloat("gpu_clock", defaultClocks.gpuMHz.lastOrNull()?.toFloat() ?: 1100f); set(value) = prefs.edit().putFloat("gpu_clock", value).apply()
+    private val defaultClocks get() = com.dfdx047.odinhub.tools.DeviceRegistry.current.fallbackTables
 
     var globalLsfgEnabled: Boolean get() = prefs.getBoolean("global_lsfg_enabled", false); set(value) = prefs.edit().putBoolean("global_lsfg_enabled", value).apply()
     var lsfgMultiplier: String get() = prefs.getString("lsfg_multiplier", "2x") ?: "2x"; set(value) = prefs.edit().putString("lsfg_multiplier", value).apply()
@@ -143,14 +155,35 @@ class SharedPrefsRepo @Inject constructor(
 
     fun saveCustomProfile(name: String, type: String, val1: Float, val2: Float, val3: Float, val4: Float) {
         prefs.edit().putString("custom_profile_${name}_type", type).putFloat("custom_profile_${name}_v1", val1).putFloat("custom_profile_${name}_v2", val2).putFloat("custom_profile_${name}_v3", val3).putFloat("custom_profile_${name}_v4", val4).apply()
+        _customProfilesFlow.value = getAllCustomProfiles()
     }
 
     fun getAllCustomProfiles(): List<CustomProfile> {
         val profiles = mutableListOf<CustomProfile>()
         prefs.all.keys.filter { it.startsWith("custom_profile_") && it.endsWith("_type") }.forEach { key ->
-            val name = key.replace("custom_profile_", "").replace("_type", "")
+            // removePrefix/removeSuffix: o replace() antigo também apagava "_type" do MEIO do
+            // nome ("meu_type_x" virava "meu_x" e os valores eram lidos de chaves inexistentes).
+            val name = key.removePrefix("custom_profile_").removeSuffix("_type")
             profiles.add(CustomProfile(name, prefs.getString(key, "TDP") ?: "TDP", prefs.getFloat("custom_profile_${name}_v1", 0f), prefs.getFloat("custom_profile_${name}_v2", 0f), prefs.getFloat("custom_profile_${name}_v3", 0f), prefs.getFloat("custom_profile_${name}_v4", 0f)))
         }
-        return profiles
+        return profiles.sortedBy { it.name.lowercase() }
     }
+
+    private val _customProfilesFlow = kotlinx.coroutines.flow.MutableStateFlow(getAllCustomProfiles())
+
+    /** Presets do utilizador, reativos: um preset gravado no overlay aparece logo no Settings. */
+    val customProfilesFlow: kotlinx.coroutines.flow.StateFlow<List<CustomProfile>> get() = _customProfilesFlow
+
+    // ---- Fundo da app (wallpaper). Antes vivia só em rememberSaveable e voltava ao padrão a
+    // cada arranque. `wallpaperStatic` guarda 1/2 (não o id do recurso, que muda entre builds).
+    var wallpaperType: String get() = prefs.getString("wallpaper_type", "Static") ?: "Static"; set(value) = prefs.edit().putString("wallpaper_type", value).apply()
+    var wallpaperBlur: Boolean get() = prefs.getBoolean("wallpaper_blur", true); set(value) = prefs.edit().putBoolean("wallpaper_blur", value).apply()
+    var wallpaperBlurIntensity: Float get() = prefs.getFloat("wallpaper_blur_intensity", 0.4f); set(value) = prefs.edit().putFloat("wallpaper_blur_intensity", value).apply()
+    var wallpaperOpacity: Float get() = prefs.getFloat("wallpaper_opacity", 0.85f); set(value) = prefs.edit().putFloat("wallpaper_opacity", value).apply()
+    var wallpaperStatic: Int get() = prefs.getInt("wallpaper_static", 1); set(value) = prefs.edit().putInt("wallpaper_static", value).apply()
+    var wallpaperCustomUri: String? get() = prefs.getString("wallpaper_custom_uri", null); set(value) = prefs.edit().putString("wallpaper_custom_uri", value).apply()
+    var wallpaperName: String? get() = prefs.getString("wallpaper_name", null); set(value) = prefs.edit().putString("wallpaper_name", value).apply()
+
+    /** Último aparelho anunciado como "detetado" (para o aviso aparecer uma vez por aparelho). */
+    var lastDetectedDeviceId: String? get() = prefs.getString("last_detected_device", null); set(value) = prefs.edit().putString("last_detected_device", value).apply()
 }

@@ -4,15 +4,21 @@ import com.dfdx047.odinhub.data.CustomProfile
 import com.dfdx047.odinhub.models.HomeGestureConfig
 import com.dfdx047.odinhub.models.MacroStep
 import com.dfdx047.odinhub.models.TdpProfiles
-import com.dfdx047.odinhub.tools.DeviceType
+import com.dfdx047.odinhub.models.DeviceProfile
+import com.dfdx047.odinhub.tools.DeviceRegistry
+import com.dfdx047.odinhub.tools.hardware.AutoTdpTelemetry
 import com.dfdx047.odinhub.tools.hardware.ClockTables
 import com.dfdx047.odinhub.tools.hardware.ThermalStatus
 
 data class MainUiModel(
-    val deviceType: DeviceType = DeviceType.ODIN2,
+    /** Aparelho detetado (tabelas, zonas térmicas e envelope de TDP próprios). */
+    val device: DeviceProfile = DeviceRegistry.current,
     val deviceVersion: String = "",
-    val showIncompatibleDeviceDialog: Boolean = false,
+    /** O firmware tem botões traseiros M1/M2 remapeáveis? (confirmado em tempo de execução). */
+    val hasBackButtons: Boolean = true,
     val showPServerNotAvailableDialog: Boolean = false,
+    /** Estado do AutoTDP (consumo medido, pausa) para o cartão de TDP. */
+    val autoTdp: AutoTdpTelemetry = AutoTdpTelemetry(),
 
     val currentSaturation: Float = 1.0f,
     val currentTemperature: Float = 6500f,
@@ -20,7 +26,8 @@ data class MainUiModel(
     val showRemapButtonDialog: Boolean = false,
     val showOverlayShortcutDialog: Boolean = false,
     val currentButtonSetting: String = "",
-    val currentButtonKeyCode: Int = 0,
+    /** Código atual do botão no diálogo de remapeamento; -1 = ainda a ler. */
+    val currentButtonKeyCode: Int = -1,
     val overlayShortcutKeyCode: Int = 0,
 
     /** Gestos do botão Home (substituem o antigo "Toque único no Home", que já existe nas definições da AYN). */
@@ -31,22 +38,20 @@ data class MainUiModel(
     val m2MacroEnabled: Boolean = false,
     val m2MacroSteps: List<MacroStep> = emptyList(),
     val macroEditorFor: String? = null,
-    val appOverridesEnabled: Boolean = false,
 
     val selectedThemeIndex: Int = 1,
     val useAmoledBlack: Boolean = false,
 
-    val performanceProfile: String = "Stock",
-    val tdpValue: Float = 15f,
+    val tdpValue: Float = TdpProfiles.envelope.tripleA,
     /** Perfil de TDP selecionado -- ver TdpProfiles ("custom" = nenhum chip destacado). */
     val tdpProfileId: String = TdpProfiles.ID_TRIPLE_A,
     /** Tabelas reais de frequências do SoC (MHz), para os chips de clocks. */
     val clockTables: ClockTables = ClockTables.EMPTY,
     /** Estado do limite térmico (via PServerBinder) -- ver ThermalManager. */
     val thermalStatus: ThermalStatus = ThermalStatus(),
-    val cpuPerfClock: Float = 3530f,
-    val cpuPrimeClock: Float = 4320f,
-    val gpuClock: Float = 1100f,
+    val cpuPerfClock: Float = 0f,
+    val cpuPrimeClock: Float = 0f,
+    val gpuClock: Float = 0f,
     val activeLimitMode: String = "TDP",
     val fanMode: Int = 0,
     val customProfiles: List<CustomProfile> = emptyList(),
@@ -65,7 +70,6 @@ data class MainUiModel(
     val overlayEnabled: Boolean = false,
     val overlayHandleOpacity: Float = 0.5f,
     val overlayHandleWidth: Int = 22,
-    val overlayPanelOpacity: Float = 0.95f,
 
     val bgmEnabled: Boolean = true,
     val bgmVolume: Float = 0.5f,
