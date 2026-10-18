@@ -100,6 +100,7 @@ class HudFpsAndFreqTest {
         assertEquals(ButtonAction.TOGGLE_OVERLAY, cfg.actionForTaps(2))
         assertEquals(1, cfg.copy(doubleTap = ButtonAction.NONE, tripleTap = ButtonAction.NONE).maxTaps)
         assertTrue(HomeGestureConfig.MULTI_TAP_WINDOW_MS >= 400L)
+        assertTrue(HomeGestureConfig.MULTI_TAP_WINDOW_MS in HomeGestureConfig.MULTI_TAP_OPTIONS_MS)
     }
 
     @Test

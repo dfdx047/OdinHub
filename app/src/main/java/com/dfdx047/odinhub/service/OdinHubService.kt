@@ -22,6 +22,8 @@ class OdinHubService : Service() {
 
     @Inject lateinit var performanceManager: PerformanceManager
     @Inject lateinit var prefs: com.dfdx047.odinhub.data.SharedPrefsRepo
+    @Inject lateinit var updateManager: com.dfdx047.odinhub.tools.UpdateManager
+    private var updateJob: Job? = null
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var pollJob: Job? = null
@@ -44,6 +46,16 @@ class OdinHubService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (pollJob?.isActive != true) {
             pollJob = serviceScope.launch { pollLoop() }
+        }
+        // Procura versões novas em segundo plano (com notificação), mesmo sem abrir a app.
+        if (updateJob?.isActive != true) {
+            updateJob = serviceScope.launch {
+                delay(60_000) // deixa o arranque assentar
+                while (isActive) {
+                    runCatching { updateManager.autoCheck() }
+                    delay(BACKGROUND_UPDATE_INTERVAL_MS)
+                }
+            }
         }
         return START_STICKY
     }
@@ -80,6 +92,10 @@ class OdinHubService : Service() {
     override fun onDestroy() {
         serviceScope.cancel()
         super.onDestroy()
+    }
+
+    private companion object {
+        const val BACKGROUND_UPDATE_INTERVAL_MS = 3 * 60 * 60 * 1000L
     }
 
     private fun createNotificationChannel() {

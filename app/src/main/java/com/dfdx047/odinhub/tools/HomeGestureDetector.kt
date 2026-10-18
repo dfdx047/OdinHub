@@ -73,7 +73,7 @@ class HomeGestureDetector(
                 if (tapCount >= cfg.maxTaps) {
                     tapWindowRunnable.run()
                 } else {
-                    handler.postDelayed(tapWindowRunnable, HomeGestureConfig.MULTI_TAP_WINDOW_MS)
+                    handler.postDelayed(tapWindowRunnable, cfg.multiTapWindowMs)
                 }
             }
         }

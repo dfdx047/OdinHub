@@ -97,6 +97,7 @@ class SharedPrefsRepo @Inject constructor(
                 tripleTap = action("home_triple_action", d.tripleTap),
                 longPress = action("home_long_action", d.longPress),
                 longPressMs = prefs.getLong("home_long_press_ms", d.longPressMs),
+                multiTapWindowMs = prefs.getLong("home_multi_tap_ms", d.multiTapWindowMs),
             )
         }
         set(value) {
@@ -107,6 +108,7 @@ class SharedPrefsRepo @Inject constructor(
                 .putString("home_triple_action", value.tripleTap.id)
                 .putString("home_long_action", value.longPress.id)
                 .putLong("home_long_press_ms", value.longPressMs)
+                .putLong("home_multi_tap_ms", value.multiTapWindowMs)
                 .apply()
         }
 
@@ -246,6 +248,8 @@ class SharedPrefsRepo @Inject constructor(
     // ---- Auto-update ----
     var lastUpdateCheck: Long get() = prefs.getLong("last_update_check", 0L); set(value) = prefs.edit().putLong("last_update_check", value).apply()
     /** Release que o utilizador mandou ignorar ("ignorar esta versão"). */
+    /** Última release para a qual já se mostrou a notificação (não repetir a cada verificação). */
+    var notifiedUpdateTag: String? get() = prefs.getString("notified_update_tag", null); set(value) = prefs.edit().putString("notified_update_tag", value).apply()
     var skippedUpdateTag: String? get() = prefs.getString("skipped_update_tag", null); set(value) = prefs.edit().putString("skipped_update_tag", value).apply()
 
     /** Último aparelho anunciado como "detetado" (para o aviso aparecer uma vez por aparelho). */

@@ -67,15 +67,38 @@ class UpdateManager @Inject constructor(
     private val _state = MutableStateFlow<UpdateState>(UpdateState.Idle)
     val state: StateFlow<UpdateState> = _state.asStateFlow()
 
-    /** Verificação automática no arranque: no máximo a cada [AUTO_CHECK_INTERVAL_MS], e respeita "ignorar esta versão". */
-    suspend fun autoCheck() {
+    /**
+     * Verificação automática (ao abrir a app e, em segundo plano, pelo OdinHubService): no máximo
+     * a cada [AUTO_CHECK_INTERVAL_MS], respeita "ignorar esta versão" e mostra uma NOTIFICAÇÃO
+     * uma vez por versão nova.
+     *
+     * BUG ANTERIOR: o intervalo era de 6 h e só se verificava ao abrir a app -- uma versão
+     * publicada pouco depois de abrir a app só aparecia horas mais tarde, e nunca havia aviso.
+     */
+    suspend fun autoCheck(force: Boolean = false) {
         val now = System.currentTimeMillis()
-        if (now - prefs.lastUpdateCheck < AUTO_CHECK_INTERVAL_MS) return
+        if (!force && now - prefs.lastUpdateCheck < AUTO_CHECK_INTERVAL_MS) {
+            // Já se verificou há pouco: se havia versão nova, volta a mostrá-la no pop-up.
+            pending?.let {
+                if (_state.value is UpdateState.Idle && it.tag != prefs.skippedUpdateTag && it.tag != dismissedTag) _state.value = UpdateState.Available(it)
+            }
+            return
+        }
         val found = check(manual = false)
-        // Só conta como "verificado" se a consulta correu bem (uma falha de rede não bloqueia 6 h).
-        if (_state.value !is UpdateState.Failed) prefs.lastUpdateCheck = now
-        if (found != null && found.tag == prefs.skippedUpdateTag) _state.value = UpdateState.Idle
+        prefs.lastUpdateCheck = now
+        if (found == null) return
+        if (found.tag == prefs.skippedUpdateTag) {
+            _state.value = UpdateState.Idle
+            return
+        }
+        if (prefs.notifiedUpdateTag != found.tag) {
+            UpdateNotifier.show(context, found, prefs.isEnglish)
+            prefs.notifiedUpdateTag = found.tag
+        }
     }
+
+    /** Última versão nova encontrada (para reabrir o pop-up sem voltar a perguntar ao GitHub). */
+    @Volatile private var pending: AppRelease? = null
 
     /** Pergunta ao GitHub pela última release. Devolve-a se for mais nova do que a instalada. */
     suspend fun check(manual: Boolean = true): AppRelease? = withContext(Dispatchers.IO) {
@@ -85,6 +108,7 @@ class UpdateManager @Inject constructor(
         if (manual) _state.value = UpdateState.Checking
         val result = runCatching { fetchLatest() }
         val release = result.getOrNull()
+        pending = release?.takeIf { isNewer(it.tag, BuildConfig.VERSION_NAME) }
         _state.value = when {
             result.isFailure -> if (manual) UpdateState.Failed(errorText(result.exceptionOrNull())) else UpdateState.Idle
             release == null -> if (manual) UpdateState.UpToDate else UpdateState.Idle
@@ -99,11 +123,16 @@ class UpdateManager @Inject constructor(
         _state.value = UpdateState.Idle
     }
 
+    /** "Mais tarde": não volta a abrir o pop-up desta versão até a app reiniciar. */
+    @Volatile private var dismissedTag: String? = null
+
     fun dismiss() {
+        (_state.value as? UpdateState.Available)?.let { dismissedTag = it.release.tag }
         _state.value = UpdateState.Idle
     }
 
     suspend fun downloadAndInstall(release: AppRelease) = withContext(Dispatchers.IO) {
+        UpdateNotifier.cancel(context)
         val apk = runCatching { download(release) }.getOrElse {
             Log.w(TAG, "download falhou", it)
             _state.value = UpdateState.Failed(errorText(it), release)
@@ -261,7 +290,7 @@ class UpdateManager @Inject constructor(
 
         private const val TMP_APK = "/data/local/tmp/odinhub_update.apk"
         private val SAFE_PATH = Regex("/[A-Za-z0-9_./-]+")
-        const val AUTO_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000L
+        const val AUTO_CHECK_INTERVAL_MS = 30 * 60 * 1000L
 
         fun isNewer(remoteTag: String, installed: String): Boolean =
             com.dfdx047.odinhub.models.Versions.isNewer(remoteTag, installed)

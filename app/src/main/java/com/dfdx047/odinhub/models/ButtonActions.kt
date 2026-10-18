@@ -37,6 +37,8 @@ data class HomeGestureConfig(
     val tripleTap: ButtonAction = ButtonAction.SCREEN_RECORD,
     val longPress: ButtonAction = ButtonAction.SCREENSHOT,
     val longPressMs: Long = DEFAULT_LONG_PRESS_MS,
+    /** Tempo máximo entre toques para contarem como duplo/triplo (ajustável no cartão). */
+    val multiTapWindowMs: Long = MULTI_TAP_WINDOW_MS,
 ) {
     /**
      * Quantos toques vale a pena esperar. Se o triplo e o duplo estiverem em "Nada", o toque
@@ -61,7 +63,8 @@ data class HomeGestureConfig(
         /** Janela entre toques para contarem como duplo/triplo. */
         // 300 ms era curto para o Home "mole" das consolas: o duplo toque saía muitas vezes como
         // dois toques simples.
-        const val MULTI_TAP_WINDOW_MS = 400L
+        const val MULTI_TAP_WINDOW_MS = 450L
+        val MULTI_TAP_OPTIONS_MS = listOf(300L, 450L, 600L, 800L)
         val LONG_PRESS_OPTIONS_MS = listOf(1000L, 1500L, 2000L, 3000L)
     }
 }

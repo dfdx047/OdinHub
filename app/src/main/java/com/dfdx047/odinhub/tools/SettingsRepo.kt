@@ -67,6 +67,8 @@ class SettingsRepo @Inject constructor(
 
     private fun grantAllAppsPermission() {
         executor.executeAsRoot("pm grant $PACKAGE android.permission.QUERY_ALL_PACKAGES")
+        // Para a notificação de versão nova (Android 13+ pede esta permissão em runtime).
+        executor.executeAsRoot("pm grant $PACKAGE android.permission.POST_NOTIFICATIONS")
     }
 
     private fun addOdinHubToWhitelist() {

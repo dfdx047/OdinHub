@@ -127,24 +127,30 @@ class HudSampler @Inject constructor(
         var cpuUsage: Int? = null
 
         val wantCpu = cfg.has(HudMetric.CPU_USAGE)
-        if ((cfg.needsRoot || wantCpu) && executor.outputCaptureWorks) {
+        // Uso da CPU primeiro pelo idle dos núcleos (sem root, sem binder). Só se este kernel não
+        // expuser o cpuidle é que se recorre ao /proc/stat por root, numa transação À PARTE.
+        if (wantCpu) cpuUsage = cpuUsageFromIdle()
+        if (wantCpu && cpuUsage == null && lastIdle == null && executor.outputCaptureWorks) {
+            val stat = HudMath.parseCpuStat(executor.executeAsRoot("head -n 1 /proc/stat").getOrNull()?.lines()?.firstOrNull { it.trim().startsWith("cpu ") })
+            val previous = lastCpu
+            if (stat != null && previous != null) cpuUsage = HudMath.cpuUsage(previous, stat)
+            lastCpu = stat
+        }
+        if (cfg.needsRoot && executor.outputCaptureWorks) {
             val wantFps = cfg.metrics.any { it.isFps }
             val pkg = foregroundTracker.currentPackage.value.takeIf { it.isNotBlank() && it != ForegroundAppTracker.GLOBAL && it.matches(PACKAGE) }
             if (wantFps && pkg != layerPackage) resolveLayer(pkg)
             val layer = layerCandidates.getOrNull(layerIndex)
 
-            // Uma única transação root por segundo: /proc/stat + frames da camada do jogo (ou o
-            // contador antigo, se não houver camada). O /proc/stat vai PRIMEIRO: a saída do
-            // dumpsys --latency é longa (até 128 linhas) e, se o binder a cortar, o uso da CPU
-            // perdia-se com ela -- era o "CPU --%" com a GPU a funcionar.
+            // UM comando simples por transação. O PServer não executa de forma fiável cadeias
+            // `a; b` (ver HardwareWriteOp): na v0.9 só corria o dumpsys (CPU vazia) e na v0.10,
+            // com a ordem trocada, só o /proc/stat (FPS vazio).
             val fpsCmd = when {
                 !wantFps -> null
                 layer != null -> "dumpsys SurfaceFlinger --latency ${shellQuote(layer)}"
                 else -> "service call SurfaceFlinger 1013"
             }
-            val cmd = listOfNotNull(if (wantCpu) "head -n 1 /proc/stat; echo $STAT_MARK" else null, fpsCmd).joinToString("; ")
-            val out = executor.executeAsRoot(cmd).getOrNull().orEmpty()
-            val fpsPart = if (wantCpu) out.substringAfter(STAT_MARK, "") else out
+            val fpsPart = fpsCmd?.let { executor.executeAsRoot(it).getOrNull() }.orEmpty()
 
             if (wantFps && layer != null) {
                 val before = fpsTracker.newest
@@ -177,16 +183,7 @@ class HudSampler @Inject constructor(
                 lastFlipsAt = now
                 frametime = fps?.takeIf { it >= 1f }?.let { 1000f / it }
             }
-            if (wantCpu) {
-                val stat = HudMath.parseCpuStat(out.substringBefore(STAT_MARK).lines().firstOrNull { it.trim().startsWith("cpu ") })
-                val previous = lastCpu
-                if (stat != null && previous != null) cpuUsage = HudMath.cpuUsage(previous, stat)
-                lastCpu = stat
-            }
         }
-
-        // Sem root (ou /proc/stat bloqueado pelo SELinux): uso pelo tempo em idle dos núcleos.
-        if (wantCpu && cpuUsage == null) cpuUsage = cpuUsageFromIdle()
 
         if (frametime != null) {
             history.addLast(frametime)
@@ -284,7 +281,6 @@ class HudSampler @Inject constructor(
         const val INTERVAL_MS = 1_000L
         const val HISTORY = 60
         const val CPUFREQ = "/sys/devices/system/cpu/cpufreq"
-        const val STAT_MARK = "__odinhub_stat__"
         val PACKAGE = Regex("[A-Za-z0-9_.]+")
 
         /** Zonas de CPU (Qualcomm: cpu-*, cpuss-*; MediaTek: mtktscpu, cpu_big/little, soc_max). */

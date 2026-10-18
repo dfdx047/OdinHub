@@ -169,7 +169,7 @@ keyAlias=odinhub
 keyPassword=YOUR_PASSWORD
 ```
 
-For GitHub Actions, add these repository secrets: `ODINHUB_KEYSTORE_BASE64` (output of `base64 -w0 odinhub.jks`), `ODINHUB_KEYSTORE_PASSWORD`, `ODINHUB_KEY_ALIAS`, `ODINHUB_KEY_PASSWORD`. Both debug and release builds then use that key. Without it, builds still work with the debug key.
+For GitHub Actions, add these repository secrets: `ODINHUB_KEYSTORE_BASE64` (output of `base64 -w0 odinhub.jks`), `ODINHUB_KEYSTORE_PASSWORD`, `ODINHUB_KEY_ALIAS`, `ODINHUB_KEY_PASSWORD`. Both debug and release builds then use that key. Without it, normal builds still work with the debug key, but **tag (release) builds fail on purpose**: a release signed with a throwaway key could never update over the previous one.
 
 Releases must be **published** (not left as drafts) for the in-app updater to see them.
 

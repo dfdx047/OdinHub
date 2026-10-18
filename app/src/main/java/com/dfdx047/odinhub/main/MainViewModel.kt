@@ -67,6 +67,7 @@ class MainViewModel @Inject constructor(
     fun installUpdate(release: com.dfdx047.odinhub.tools.AppRelease) { viewModelScope.launch { updateManager.downloadAndInstall(release) } }
     fun skipUpdate(release: com.dfdx047.odinhub.tools.AppRelease) = updateManager.skip(release)
     fun dismissUpdate() = updateManager.dismiss()
+    fun onAppResumed() { viewModelScope.launch { runCatching { updateManager.autoCheck() } } }
 
     private val _uiState = MutableStateFlow(MainUiModel())
     val uiState: StateFlow<MainUiModel> = _uiState.asStateFlow()
@@ -150,7 +151,7 @@ class MainViewModel @Inject constructor(
         soundManager.startBackgroundMusicIfEnabled()
 
         // Auto-update: verificação discreta no arranque (no máximo a cada 6 h).
-        viewModelScope.launch { runCatching { updateManager.autoCheck() } }
+        // (A verificação ao abrir é feita em onAppResumed, chamada pelo ecrã principal.)
 
         // O motor gráfico (camada Vulkan real para ReShade/SGSR/LSFG) foi removido -- não estava
         // estável em hardware real (travava o próprio processo da app, ver histórico). Voltamos

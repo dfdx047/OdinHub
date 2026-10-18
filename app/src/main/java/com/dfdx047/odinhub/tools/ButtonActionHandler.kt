@@ -237,12 +237,11 @@ class ButtonActionHandler @Inject constructor(
                 // Sem captura de saída (Odin 2 Mini) não há como perguntar ao sistema: vale o
                 // estado em memória.
                 val canAsk = executor.outputCaptureWorks
-                val state = if (canAsk) executor.executeAsRoot("[ -f $REC_FLAG ] && echo REC_FLAG; pidof screenrecord > /dev/null && echo REC_PID").getOrNull().orEmpty() else ""
-                val running = if (canAsk) state.contains("REC_PID") || (isRecording && state.contains("REC_FLAG")) else isRecording
+                val running = if (canAsk) isScreenrecordRunning() || (isRecording && recFlagExists()) else isRecording
                 if (running) {
                     stopRecording()
                 } else {
-                    if (state.contains("REC_FLAG")) executor.executeAsRoot("rm -f $REC_FLAG")
+                    executor.executeAsRoot("rm -f $REC_FLAG")
                     startRecording()
                 }
                 delay(TOGGLE_GUARD_MS)
@@ -252,28 +251,78 @@ class ButtonActionHandler @Inject constructor(
         }
     }
 
+    // Só comandos SIMPLES por transação: o PServer não corre de forma fiável cadeias `a; b` /
+    // `a && b` / `( ... ) &` -- era por isso que a gravação nunca arrancava (só o `mkdir` do
+    // início da linha corria). O laço de gravação vive num script que o PServer executa com um
+    // único `sh <ficheiro>`; o script põe o laço em segundo plano e termina logo.
+    private fun isScreenrecordRunning(): Boolean =
+        executor.executeAsRoot("pidof screenrecord").getOrNull()?.trim()?.any { it.isDigit() } == true
+
+    private fun recFlagExists(): Boolean =
+        executor.executeAsRoot("ls $REC_FLAG").getOrNull()?.contains("odinhub_rec") == true
+
+    /** Grava o script na pasta interna e na externa; devolve os caminhos a tentar, por ordem. */
+    private fun writeRecordScript(base: String): List<String> {
+        val script = """
+            |#!/system/bin/sh
+            |FLAG=$REC_FLAG
+            |DIR=$REC_DIR
+            |mkdir -p "${'$'}DIR"
+            |touch "${'$'}FLAG"
+            |(
+            |  i=1; f=0; LIMIT=1800
+            |  while [ -f "${'$'}FLAG" ]; do
+            |    t0=${'$'}(date +%s)
+            |    screenrecord --bit-rate $REC_BITRATE --time-limit ${'$'}LIMIT "${'$'}DIR/${base}_${'$'}i.mp4"
+            |    if [ ${'$'}(( ${'$'}(date +%s) - t0 )) -lt 3 ]; then
+            |      # Versões antigas do screenrecord só aceitam até 180 s: tenta de novo com 180.
+            |      if [ ${'$'}LIMIT -gt 180 ]; then LIMIT=180; else f=${'$'}((f+1)); sleep 1; fi
+            |    else
+            |      f=0; i=${'$'}((i+1))
+            |    fi
+            |    [ ${'$'}f -ge 3 ] && rm -f "${'$'}FLAG"
+            |  done
+            |) > /dev/null 2>&1 < /dev/null &
+            |""".trimMargin()
+        val paths = mutableListOf<String>()
+        runCatching {
+            val file = java.io.File(context.filesDir, "odinhub_rec.sh")
+            file.writeText(script)
+            file.setReadable(true, false)
+            context.filesDir.setExecutable(true, false)
+            paths += file.absolutePath
+        }
+        // Recurso: o domínio SELinux do PServer pode não ler a pasta privada da app.
+        runCatching {
+            val dir = context.getExternalFilesDir(null) ?: return@runCatching
+            val file = java.io.File(dir, "odinhub_rec.sh")
+            file.writeText(script)
+            paths += file.absolutePath
+            paths += file.absolutePath.replace("/storage/emulated/0/", "/data/media/0/")
+        }
+        return paths.distinct().filter { it.matches(SAFE_SCRIPT_PATH) }
+    }
+
     private suspend fun startRecording() {
         val base = "OdinHub_" + SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
         recordingBase = base
         isRecording = true
-        toast(if (isEn) "Screen recording started" else "Gravação de ecrã iniciada")
-        // Cada segmento que morre em menos de 3 s conta como falha; 3 seguidas (codificador
-        // ocupado, ecrã protegido, pasta ilegível...) desligam o laço. Antes ele relançava o
-        // screenrecord sem pausa, como root, para sempre -- a encher a pasta de ficheiros vazios.
-        val loop = "i=1; f=0; while [ -f $REC_FLAG ]; do " +
-            "t0=\$(date +%s); " +
-            "screenrecord --bit-rate $REC_BITRATE --time-limit 1800 $REC_DIR/${base}_\$i.mp4 || " +
-            "{ [ -f $REC_FLAG ] && screenrecord --bit-rate $REC_BITRATE --time-limit 180 $REC_DIR/${base}_\${i}b.mp4; }; " +
-            "if [ \$(( \$(date +%s) - t0 )) -lt 3 ]; then f=\$((f+1)); sleep 1; else f=0; fi; " +
-            "[ \$f -ge 3 ] && rm -f $REC_FLAG; " +
-            "i=\$((i+1)); done"
-        val cmd = "mkdir -p $REC_DIR ; touch $REC_FLAG ; ( $loop ) > /dev/null 2>&1 < /dev/null &"
-        executor.executeAsRoot(cmd)
-        if (!executor.outputCaptureWorks) return // não dá para confirmar; o laço desliga-se sozinho se falhar
-        delay(2500)
-        // A gravar de verdade = a flag continua lá e há um screenrecord vivo.
-        val state = executor.executeAsRoot("[ -f $REC_FLAG ] && echo REC_FLAG; pidof screenrecord > /dev/null && echo REC_PID").getOrNull().orEmpty()
-        if (!state.contains("REC_FLAG") || !state.contains("REC_PID")) {
+        val scripts = writeRecordScript(base)
+        if (!executor.outputCaptureWorks) {
+            scripts.firstOrNull()?.let { executor.executeAsRoot("sh $it") }
+            toast(if (isEn) "Screen recording started" else "Gravação de ecrã iniciada")
+            return // não dá para confirmar; o laço desliga-se sozinho se falhar
+        }
+        var started = false
+        for (path in scripts) {
+            executor.executeAsRoot("sh $path")
+            delay(2000)
+            // A gravar de verdade = há um screenrecord vivo.
+            if (isScreenrecordRunning()) { started = true; break }
+        }
+        if (started) {
+            toast(if (isEn) "Screen recording started — whole screen, no audio" else "Gravação iniciada — ecrã inteiro, sem áudio")
+        } else {
             isRecording = false
             executor.executeAsRoot("rm -f $REC_FLAG")
             toast(if (isEn) "Could not start screen recording" else "Não foi possível iniciar a gravação")
@@ -315,6 +364,7 @@ class ButtonActionHandler @Inject constructor(
         const val REC_FLAG = "/data/local/tmp/odinhub_rec.flag"
         const val REC_BITRATE = 20_000_000
         val PACKAGE_NAME = Regex("[A-Za-z0-9_.]+")
+        val SAFE_SCRIPT_PATH = Regex("/[A-Za-z0-9_./-]+")
 
         /** Ignora um segundo toque logo a seguir (duplo clique acidental no gesto). */
         const val TOGGLE_GUARD_MS = 800L

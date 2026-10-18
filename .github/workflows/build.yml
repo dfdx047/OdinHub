@@ -44,6 +44,11 @@ jobs:
           if [ -n "$KEYSTORE_B64" ]; then
             echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/odinhub.jks"
             echo "ODINHUB_KEYSTORE=$RUNNER_TEMP/odinhub.jks" >> "$GITHUB_ENV"
+          elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            # Uma release assinada com a chave de debug do runner (diferente a cada build) nunca
+            # instala por cima da anterior -- melhor falhar aqui do que publicar um APK assim.
+            echo "::error::Faltam os segredos de assinatura (ODINHUB_KEYSTORE_BASE64...). A release não seria atualizável."
+            exit 1
           fi
 
       # Antes, a CI só rodava assembleDebug -- ou seja, um build que compila mas quebra em

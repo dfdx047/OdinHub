@@ -211,6 +211,15 @@ fun SettingsScreen(viewModel: MainViewModel = hiltViewModel(), navigateToOverrid
     // é dito à cara.
     // Auto-update (pop-up de versão nova / progresso do download e da instalação).
     val updateState by viewModel.updateState.collectAsState()
+    // Ao voltar à app (ex: tocando na notificação de versão nova), volta a verificar/mostrar.
+    val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) viewModel.onAppResumed()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
     UpdateDialog(
         state = updateState,
         theme = finalTheme,

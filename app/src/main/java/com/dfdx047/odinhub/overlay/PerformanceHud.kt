@@ -14,6 +14,8 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -33,6 +35,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
@@ -120,6 +124,11 @@ class PerformanceHud(
                     theme = theme,
                     isEn = isEn,
                     modifier = Modifier
+                        // BUG "acrescento uma métrica e ela fica cortada": a janela é
+                        // WRAP_CONTENT, mas o ComposeView não volta a ser medido pela janela
+                        // quando o conteúdo cresce -- o novo conteúdo ficava recortado pelo
+                        // tamanho antigo. A cada mudança de tamanho, pede-se nova medição.
+                        .onSizeChanged { relayout() }
                         .pointerInput(Unit) { detectTapGestures(onDoubleTap = { onDoubleTap() }) }
                         .pointerInput(Unit) {
                             detectDragGestures(
@@ -149,6 +158,15 @@ class PerformanceHud(
             host = null
             params = null
             shownConfig = null
+        }
+    }
+
+    private fun relayout() {
+        main.post {
+            val view = host?.composeView ?: return@post
+            val lp = params ?: return@post
+            view.requestLayout()
+            runCatching { windowManager?.updateViewLayout(view, lp) }
         }
     }
 
@@ -190,6 +208,7 @@ private fun heatColor(value: Float?, warm: Float, hot: Float, normal: Color): Co
     else -> normal
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun HudContent(config: HudConfig, snap: HudSnapshot, theme: ConsoleTheme, isEn: Boolean, modifier: Modifier = Modifier) {
     val scale = config.textScale
@@ -214,7 +233,14 @@ fun HudContent(config: HudConfig, snap: HudSnapshot, theme: ConsoleTheme, isEn: 
         .padding(horizontal = (8 * scale).dp, vertical = (5 * scale).dp)
 
     if (config.layout == HudLayout.HORIZONTAL) {
-        Row(modifier = base, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy((10 * scale).dp)) {
+        // Com muitas métricas a barra passava da largura do ecrã e cortava-se: agora quebra para
+        // uma segunda linha (como o MangoHud), nunca mais larga do que o ecrã.
+        val maxWidth = (LocalConfiguration.current.screenWidthDp - 16).coerceAtLeast(200).dp
+        FlowRow(
+            modifier = base.widthIn(max = maxWidth),
+            horizontalArrangement = Arrangement.spacedBy((10 * scale).dp),
+            verticalArrangement = Arrangement.spacedBy((2 * scale).dp),
+        ) {
             items.forEach { item -> HudItem(item, labelColor, labelSize, valueSize, theme, inline = true) }
             if (config.has(HudMetric.FPS_GRAPH) && snap.frametimeHistory.size > 1) {
                 FrametimeGraph(snap.frametimeHistory, theme, Modifier.width((70 * scale).dp).height((18 * scale).dp))

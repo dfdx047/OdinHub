@@ -115,6 +115,22 @@ fun HomeGesturesCard(
             }
             Spacer(Modifier.height(8.dp))
             Text(
+                if (isEn) "Time between taps (double / triple tap)" else "Tempo entre toques (duplo / triplo)",
+                color = theme.text.copy(alpha = 0.7f), fontFamily = theme.fontFamily, fontSize = 11.sp,
+            )
+            Spacer(Modifier.height(4.dp))
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                HomeGestureConfig.MULTI_TAP_OPTIONS_MS.forEach { ms ->
+                    SmallChip("$ms ms", config.multiTapWindowMs == ms, config.enabled, theme, Modifier.weight(1f)) { onChange(config.copy(multiTapWindowMs = ms)) }
+                }
+            }
+            Text(
+                if (isEn) "If double taps come out as two single taps, pick a longer time. Longer = the single tap fires a bit later."
+                else "Se o toque duplo sai como dois simples, escolha um tempo maior. Maior = o toque simples demora um pouco mais.",
+                color = theme.text.copy(alpha = 0.5f), fontFamily = theme.fontFamily, fontSize = 10.sp,
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
                 if (isEn) "Screen recording captures the whole screen (no app picker) and is saved to Movies/OdinHub. No audio."
                 else "A gravação capta o ecrã inteiro (sem escolher app) e fica em Movies/OdinHub. Sem áudio.",
                 color = theme.text.copy(alpha = 0.5f), fontFamily = theme.fontFamily, fontSize = 10.sp,
