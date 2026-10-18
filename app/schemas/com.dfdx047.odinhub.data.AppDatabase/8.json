@@ -1,0 +1,184 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 8,
+    "identityHash": "9ece3a653982d3dc102c28215e1e28ea",
+    "entities": [
+      {
+        "tableName": "appoverride",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`packageName` TEXT NOT NULL, `limitMode` TEXT NOT NULL, `tdpWatts` REAL, `perfClockKHz` INTEGER, `primeClockKHz` INTEGER, `gpuClockHz` INTEGER, `fanSettingsValue` INTEGER, `tdpProfile` TEXT, `clockProfile` TEXT, `fanProfile` TEXT, `lsfgEnabled` INTEGER NOT NULL, `lsfgMultiplier` INTEGER NOT NULL, `lsfgPerformanceMode` INTEGER NOT NULL, `lsfgFramePacing` INTEGER NOT NULL, `lsfgQuality` REAL NOT NULL, `sgsrEnabled` INTEGER NOT NULL, `sgsrMode` TEXT NOT NULL, `sgsrSharpness` REAL NOT NULL, `reshadeProfile` TEXT NOT NULL, `saturationOverride` REAL NOT NULL, `temperatureOverride` REAL NOT NULL, `displayOverride` INTEGER NOT NULL, `thermalMode` TEXT, `m1Macro` TEXT, `m2Macro` TEXT, `effClockKHz` INTEGER, PRIMARY KEY(`packageName`))",
+        "fields": [
+          {
+            "fieldPath": "packageName",
+            "columnName": "packageName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "limitMode",
+            "columnName": "limitMode",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "tdpWatts",
+            "columnName": "tdpWatts",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "perfClockKHz",
+            "columnName": "perfClockKHz",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "primeClockKHz",
+            "columnName": "primeClockKHz",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "gpuClockHz",
+            "columnName": "gpuClockHz",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "fanSettingsValue",
+            "columnName": "fanSettingsValue",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "tdpProfile",
+            "columnName": "tdpProfile",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "clockProfile",
+            "columnName": "clockProfile",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "fanProfile",
+            "columnName": "fanProfile",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "lsfgEnabled",
+            "columnName": "lsfgEnabled",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lsfgMultiplier",
+            "columnName": "lsfgMultiplier",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lsfgPerformanceMode",
+            "columnName": "lsfgPerformanceMode",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lsfgFramePacing",
+            "columnName": "lsfgFramePacing",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lsfgQuality",
+            "columnName": "lsfgQuality",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sgsrEnabled",
+            "columnName": "sgsrEnabled",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sgsrMode",
+            "columnName": "sgsrMode",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sgsrSharpness",
+            "columnName": "sgsrSharpness",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "reshadeProfile",
+            "columnName": "reshadeProfile",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "saturationOverride",
+            "columnName": "saturationOverride",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "temperatureOverride",
+            "columnName": "temperatureOverride",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "displayOverride",
+            "columnName": "displayOverride",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "thermalMode",
+            "columnName": "thermalMode",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "m1Macro",
+            "columnName": "m1Macro",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "m2Macro",
+            "columnName": "m2Macro",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "effClockKHz",
+            "columnName": "effClockKHz",
+            "affinity": "INTEGER",
+            "notNull": false
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "packageName"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": []
+      }
+    ],
+    "views": [],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '9ece3a653982d3dc102c28215e1e28ea')"
+    ]
+  }
+}
