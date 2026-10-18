@@ -57,8 +57,16 @@ class MainViewModel @Inject constructor(
     private val thermalManager: ThermalManager,
     private val displayManager: DisplayManager,
     private val losslessManager: LosslessManager,
-    private val soundManager: SoundManager
+    private val soundManager: SoundManager,
+    private val updateManager: com.dfdx047.odinhub.tools.UpdateManager,
 ) : ViewModel() {
+
+    /** Estado do auto-update (o diálogo no SettingsScreen observa isto). */
+    val updateState: StateFlow<com.dfdx047.odinhub.tools.UpdateState> get() = updateManager.state
+    fun checkForUpdates() { viewModelScope.launch { updateManager.check(manual = true) } }
+    fun installUpdate(release: com.dfdx047.odinhub.tools.AppRelease) { viewModelScope.launch { updateManager.downloadAndInstall(release) } }
+    fun skipUpdate(release: com.dfdx047.odinhub.tools.AppRelease) = updateManager.skip(release)
+    fun dismissUpdate() = updateManager.dismiss()
 
     private val _uiState = MutableStateFlow(MainUiModel())
     val uiState: StateFlow<MainUiModel> = _uiState.asStateFlow()
@@ -92,6 +100,7 @@ class MainViewModel @Inject constructor(
 
                 selectedThemeIndex = prefs.selectedThemeIndex,
                 useAmoledBlack = prefs.useAmoledBlack,
+                useGlass = prefs.useGlass,
                 fanMode = prefs.fanMode,
                 customProfiles = prefs.getAllCustomProfiles(),
 
@@ -105,6 +114,7 @@ class MainViewModel @Inject constructor(
                 tdpProfileId = prefs.tdpProfileId,
                 cpuPerfClock = prefs.cpuPerfClock,
                 cpuPrimeClock = prefs.cpuPrimeClock,
+                cpuEffClock = prefs.cpuEffClock,
                 gpuClock = prefs.gpuClock,
 
                 currentSaturation = prefs.saturationOverride,
@@ -139,6 +149,9 @@ class MainViewModel @Inject constructor(
 
         soundManager.startBackgroundMusicIfEnabled()
 
+        // Auto-update: verificação discreta no arranque (no máximo a cada 6 h).
+        viewModelScope.launch { runCatching { updateManager.autoCheck() } }
+
         // O motor gráfico (camada Vulkan real para ReShade/SGSR/LSFG) foi removido -- não estava
         // estável em hardware real (travava o próprio processo da app, ver histórico). Voltamos
         // ao `VulkanNativeBridge` original (ponte JNI que só guarda os valores, sem efeito real
@@ -161,6 +174,9 @@ class MainViewModel @Inject constructor(
         if (prefs.overlayEnabled) {
             context.startService(Intent(context, GamingOverlayService::class.java))
         }
+        // Abrir a app volta a mostrar o HUD (se tinha sido escondido com dois toques).
+        com.dfdx047.odinhub.service.PerformanceHudService.hiddenFlow.value = false
+        com.dfdx047.odinhub.service.PerformanceHudService.startIfEnabled(context, prefs)
 
         // Só emite um evento quando um nó de hardware passa a falhar (não a cada tick do daemon
         // de 1s do PerformanceManager, senão o mesmo snackbar reapareceria sem parar enquanto o
@@ -262,6 +278,7 @@ class MainViewModel @Inject constructor(
                     (current.cpuPerfClock * 1000).toLong(),
                     (current.cpuPrimeClock * 1000).toLong(),
                     (current.gpuClock * 1_000_000).toLong(),
+                    (current.cpuEffClock * 1000).toLong(),
                 )
             }
         }
@@ -329,7 +346,9 @@ class MainViewModel @Inject constructor(
         updateTdp(watts)
     }
 
-    fun updateManualClocks(perfClock: Float, primeClock: Float, gpuClock: Float) {
+    fun updateManualClocks(perfClock: Float, primeClock: Float, gpuClock: Float, effClock: Float = _uiState.value.cpuEffClock) {
+        prefs.cpuEffClock = effClock
+        _uiState.update { it.copy(cpuEffClock = effClock) }
         prefs.cpuPerfClock = perfClock
         prefs.cpuPrimeClock = primeClock
         prefs.gpuClock = gpuClock
@@ -338,14 +357,14 @@ class MainViewModel @Inject constructor(
         clockJob = viewModelScope.launch(Dispatchers.IO) {
             delay(LIVE_APPLY_DEBOUNCE_MS)
             if (prefs.activeLimitMode != "TDP") {
-                performanceManager.applyAbsoluteClocks((perfClock * 1000).toLong(), (primeClock * 1000).toLong(), (gpuClock * 1000000).toLong())
+                performanceManager.applyAbsoluteClocks((perfClock * 1000).toLong(), (primeClock * 1000).toLong(), (gpuClock * 1000000).toLong(), (effClock * 1000).toLong())
             }
         }
     }
 
-    fun saveCustomProfile(name: String, type: String, val1: Float, val2: Float, val3: Float, val4: Float) {
+    fun saveCustomProfile(name: String, type: String, val1: Float, val2: Float, val3: Float, val4: Float, val5: Float = 0f) {
         // O customProfilesFlow (coletado no init) atualiza a lista.
-        prefs.saveCustomProfile(name, type, val1, val2, val3, val4)
+        prefs.saveCustomProfile(name, type, val1, val2, val3, val4, val5)
     }
 
     // Limite térmico (root) -- ver ThermalManager. As escritas correm no scope do próprio
@@ -393,11 +412,25 @@ class MainViewModel @Inject constructor(
         prefs.wallpaperName = w.name
     }
 
-    fun updateThemeIndex(newIndex: Int) { prefs.selectedThemeIndex = newIndex; _uiState.update { it.copy(selectedThemeIndex = newIndex) } }
-    fun updateAmoledBlack(enabled: Boolean) { prefs.useAmoledBlack = enabled; _uiState.update { it.copy(useAmoledBlack = enabled) } }
+    fun updateThemeIndex(newIndex: Int) { prefs.selectedThemeIndex = newIndex; prefs.notifyAppearanceChanged(); _uiState.update { it.copy(selectedThemeIndex = newIndex) } }
+    fun updateAmoledBlack(enabled: Boolean) { prefs.useAmoledBlack = enabled; prefs.notifyAppearanceChanged(); _uiState.update { it.copy(useAmoledBlack = enabled) } }
+    fun updateGlass(enabled: Boolean) { prefs.useGlass = enabled; _uiState.update { it.copy(useGlass = enabled) } }
     fun finishWelcomeSetup() { prefs.isFirstRun = false }
     fun isFirstRun(): Boolean = prefs.isFirstRun
     fun toggleOverlay(enabled: Boolean) { prefs.overlayEnabled = enabled; _uiState.update { it.copy(overlayEnabled = enabled) }; val intent = Intent(context, GamingOverlayService::class.java); if (enabled) context.startService(intent) else context.stopService(intent) }
+    // ---- HUD de desempenho ----
+    val hudConfig: StateFlow<com.dfdx047.odinhub.models.HudConfig> get() = prefs.hudConfigFlow
+    fun updateHudConfig(config: com.dfdx047.odinhub.models.HudConfig) {
+        val wasEnabled = prefs.hudConfig.enabled
+        prefs.hudConfig = config
+        if (config.enabled && !wasEnabled) com.dfdx047.odinhub.service.PerformanceHudService.hiddenFlow.value = false
+        if (config.enabled) com.dfdx047.odinhub.service.PerformanceHudService.startIfEnabled(context, prefs)
+    }
+    fun showHudAgain() {
+        com.dfdx047.odinhub.service.PerformanceHudService.hiddenFlow.value = false
+        com.dfdx047.odinhub.service.PerformanceHudService.startIfEnabled(context, prefs)
+    }
+
     fun updateHandleOpacity(opacity: Float) { prefs.overlayHandleOpacity = opacity; _uiState.update { it.copy(overlayHandleOpacity = opacity) } }
     fun updateHandleWidth(width: Int) { prefs.overlayHandleWidth = width; _uiState.update { it.copy(overlayHandleWidth = width) } }
     fun toggleFpsOverlay(enabled: Boolean) { prefs.showFpsOverlay = enabled; _uiState.update { it.copy(showFpsOverlay = enabled) } }

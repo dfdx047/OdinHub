@@ -19,7 +19,12 @@ data class ConsoleTheme(
     val primary: Color,
     val text: Color,
     val isDynamic: Boolean = false,
-    val fontFamily: FontFamily = ConsoleFont
+    val fontFamily: FontFamily = ConsoleFont,
+    /**
+     * Aparência "vidro" (ao estilo do Liquid Glass da Apple), aplicada POR CIMA de qualquer tema:
+     * superfícies translúcidas com reflexo e contorno de luz. As cores de cada tema mantêm-se.
+     */
+    val glassMode: Boolean = false,
 )
 
 val DynamicTheme = ConsoleTheme("Dynamic", Color.Black, Color.DarkGray, Color.White, Color.White, isDynamic = true)
@@ -35,7 +40,7 @@ val PlayStationTheme = ConsoleTheme("PlayStation", Color(0xFF000033), Color(0xFF
 val AvailableThemes = listOf(DynamicTheme, OdinTheme, LightTheme, CyberpunkTheme, SnesTheme, NesTheme, XboxTheme, SteamTheme, PlayStationTheme)
 
 @Composable
-fun getResolvedTheme(theme: ConsoleTheme, useAmoledBlack: Boolean): ConsoleTheme {
+fun getResolvedTheme(theme: ConsoleTheme, useAmoledBlack: Boolean, useGlass: Boolean = false): ConsoleTheme {
     var resolved = theme
     if (theme.isDynamic && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
         val dynamicColors = dynamicDarkColorScheme(LocalContext.current)
@@ -43,9 +48,10 @@ fun getResolvedTheme(theme: ConsoleTheme, useAmoledBlack: Boolean): ConsoleTheme
     }
 
     // Se o AMOLED estiver ligado, forçamos um fundo preto, cards escuros e texto branco para não quebrar temas claros
-    return if (useAmoledBlack) {
-        resolved.copy(background = Color.Black, surface = Color(0xFF121212), text = Color(0xFFF3F4F6))
-    } else resolved
+    if (useAmoledBlack) {
+        resolved = resolved.copy(background = Color.Black, surface = Color(0xFF121212), text = Color(0xFFF3F4F6))
+    }
+    return resolved.copy(glassMode = useGlass)
 }
 // ------------------------------------------------------------------ contraste
 // Cores derivadas do tema para garantir texto legível em TODOS os temas. Antes havia texto branco
@@ -59,13 +65,33 @@ val ConsoleTheme.isLight: Boolean get() = background.luminance() > 0.5f
 val ConsoleTheme.onPrimary: Color get() = if (primary.luminance() > 0.55f) Color(0xFF111111) else Color.White
 
 /** Véu subtil para faixas/segmentos dentro dos cartões (claro em temas claros, escuro nos escuros). */
-val ConsoleTheme.scrim: Color get() = if (isLight) Color.Black.copy(alpha = 0.06f) else Color.Black.copy(alpha = 0.28f)
+val ConsoleTheme.scrim: Color get() = when {
+    glassMode && isLight -> Color.White.copy(alpha = 0.18f)
+    glassMode -> Color.Black.copy(alpha = 0.16f)
+    isLight -> Color.Black.copy(alpha = 0.06f)
+    else -> Color.Black.copy(alpha = 0.28f)
+}
 
 /** Fundo da parte de baixo do gradiente dos ecrãs: nunca preto em temas claros. */
 val ConsoleTheme.backdropBottom: Color get() = if (isLight) background.copy(alpha = 0.94f) else Color.Black.copy(alpha = 0.85f)
 
 /** Superfície "vidro fosco" dos cartões: mais opaca que antes, para o texto não competir com o wallpaper. */
-fun ConsoleTheme.glass(enabled: Boolean = true): Color = surface.copy(alpha = if (!enabled) 0.35f else if (isLight) 0.82f else 0.62f)
+fun ConsoleTheme.glass(enabled: Boolean = true): Color = when {
+    // Vidro: bem mais translúcido, mas com véu suficiente para o texto continuar legível.
+    glassMode && isLight -> Color.White.copy(alpha = if (enabled) 0.46f else 0.28f)
+    glassMode -> surface.copy(alpha = if (enabled) 0.34f else 0.22f)
+    else -> surface.copy(alpha = if (!enabled) 0.35f else if (isLight) 0.82f else 0.62f)
+}
+
+/** Raio dos cantos dos cartões: mais arredondado no modo vidro. */
+val ConsoleTheme.cardRadius: Int get() = if (glassMode) 20 else 8
+
+/** Reflexo no topo das superfícies de vidro (mais forte no modo vidro). */
+val ConsoleTheme.glassHighlight: Color get() = Color.White.copy(alpha = if (glassMode) (if (isLight) 0.30f else 0.14f) else 0.07f)
+
+/** Contorno de luz do vidro (de cima para baixo): claro no topo, quase nada em baixo. */
+val ConsoleTheme.glassEdgeTop: Color get() = Color.White.copy(alpha = if (isLight) 0.85f else 0.38f)
+val ConsoleTheme.glassEdgeBottom: Color get() = Color.White.copy(alpha = if (isLight) 0.25f else 0.06f)
 
 /** Texto secundário com contraste suficiente (antes 0.5-0.6 de alpha, ilegível em vários temas). */
 val ConsoleTheme.secondaryText: Color get() = text.copy(alpha = 0.78f)

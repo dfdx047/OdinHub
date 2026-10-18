@@ -11,6 +11,7 @@ data class AppOverrideListUiModel(
     // temas -- por isso parecia um ecrã de outra aplicação.
     val selectedThemeIndex: Int = 0,
     val useAmoledBlack: Boolean = false,
+    val useGlass: Boolean = false,
 )
 
 data class AppUiModel(

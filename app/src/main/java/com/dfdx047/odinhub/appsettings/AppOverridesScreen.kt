@@ -68,7 +68,7 @@ fun AppOverridesScreen(
     val isTdpMode = uiState.limitMode == "TDP"
 
     val rawTheme = AvailableThemes.getOrElse(uiState.selectedThemeIndex) { AvailableThemes[0] }
-    val theme = getResolvedTheme(rawTheme, uiState.useAmoledBlack)
+    val theme = getResolvedTheme(rawTheme, uiState.useAmoledBlack, uiState.useGlass)
     val accentColor = theme.primary
     val mutedText = theme.text.copy(alpha = 0.7f)
     val tap = { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove) }
@@ -182,6 +182,17 @@ fun AppOverridesScreen(
                         if (isTdpMode) {
                             Text(if (isEn) "Disabled while TDP mode is active" else "Desativado enquanto o modo TDP está ativo", color = accentColor, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                             Spacer(modifier = Modifier.height(6.dp))
+                        }
+                        if (clockTables.hasEfficiencyCluster) {
+                            ClockChipRow(
+                                title = (if (isEn) "Efficiency Cluster" else "Cluster Eficiência") + soc.effCores.takeIf { it.isNotBlank() }?.let { " ($it)" }.orEmpty(),
+                                currentMHz = if (uiState.effClockMHz > 0f) uiState.effClockMHz else (clockTables.effMHz.lastOrNull()?.toFloat() ?: 0f),
+                                tableMHz = clockTables.effMHz,
+                                enabled = !isTdpMode,
+                                theme = theme,
+                                isEn = isEn,
+                            ) { tap(); viewModel.updateClocks(uiState.perfClockMHz, uiState.primeClockMHz, uiState.gpuClockMHz, it.toFloat()) }
+                            Spacer(modifier = Modifier.height(16.dp))
                         }
                         ClockChipRow(
                             title = (if (isEn) "Perf Cluster" else "Cluster Perf") + soc.perfCores.takeIf { it.isNotBlank() }?.let { " ($it)" }.orEmpty(),

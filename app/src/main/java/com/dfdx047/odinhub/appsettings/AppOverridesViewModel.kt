@@ -41,6 +41,8 @@ data class AppOverrideUiState(
     val tdpProfileId: String = TdpProfiles.ID_TRIPLE_A,
     val perfClockMHz: Float = 3530f,
     val primeClockMHz: Float = 4320f,
+    /** Cluster de eficiência (MHz); 0 = SoC sem esse cluster. */
+    val effClockMHz: Float = 0f,
     val gpuClockMHz: Float = 1100f,
 
     // -1 = FanMode.Stock (sem override -- usa o modo global). Ver FanMode.kt.
@@ -77,6 +79,7 @@ data class AppOverrideUiState(
     // completamente do resto da aplicação.
     val selectedThemeIndex: Int = 0,
     val useAmoledBlack: Boolean = false,
+    val useGlass: Boolean = false,
 )
 
 @HiltViewModel
@@ -122,6 +125,7 @@ class AppOverrideViewModel @Inject constructor(
                 packageName = packageName,
                 selectedThemeIndex = prefs.selectedThemeIndex,
                 useAmoledBlack = prefs.useAmoledBlack,
+                useGlass = prefs.useGlass,
                 // Uma regra NOVA parte do perfil GLOBAL (como o overlay já fazia), não de valores
                 // fixos: antes, criar uma regra só para mudar o limite térmico gravava também
                 // "TDP 15 W" e passava a limitar o jogo sem o utilizador ter tocado no TDP.
@@ -131,6 +135,7 @@ class AppOverrideViewModel @Inject constructor(
                 tdpProfileId = prefs.tdpProfileId,
                 perfClockMHz = prefs.cpuPerfClock,
                 primeClockMHz = prefs.cpuPrimeClock,
+                effClockMHz = prefs.cpuEffClock,
                 gpuClockMHz = prefs.gpuClock,
                 saturationOverride = prefs.saturationOverride,
                 temperatureOverride = prefs.temperatureOverride,
@@ -187,6 +192,7 @@ class AppOverrideViewModel @Inject constructor(
                 tdpProfileId = entity.tdpWatts?.let { w -> TdpProfiles.idForWatts(w) } ?: it.tdpProfileId,
                 perfClockMHz = entity.perfClockKHz?.let { khz -> khz / 1000f } ?: it.perfClockMHz,
                 primeClockMHz = entity.primeClockKHz?.let { khz -> khz / 1000f } ?: it.primeClockMHz,
+                effClockMHz = entity.effClockKHz?.let { khz -> khz / 1000f } ?: it.effClockMHz,
                 gpuClockMHz = entity.gpuClockHz?.let { hz -> hz / 1_000_000f } ?: it.gpuClockMHz,
                 fanSettingsValue = entity.fanSettingsValue ?: it.fanSettingsValue,
 
@@ -236,7 +242,8 @@ class AppOverrideViewModel @Inject constructor(
     }
 
     /** GPU é sempre passada separadamente -- ver comentário em ClockPresets.kt sobre porquê. */
-    fun updateClocks(perfMHz: Float, primeMHz: Float, gpuMHz: Float) {
+    fun updateClocks(perfMHz: Float, primeMHz: Float, gpuMHz: Float, effMHz: Float = _uiState.value.effClockMHz) {
+        _uiState.update { it.copy(effClockMHz = effMHz) }
         markEdited()
         _uiState.update { it.copy(perfClockMHz = perfMHz, primeClockMHz = primeMHz, gpuClockMHz = gpuMHz) }
     }
@@ -292,6 +299,7 @@ class AppOverrideViewModel @Inject constructor(
                 tdpWatts = encodedTdp,
                 perfClockKHz = (current.perfClockMHz * 1000).toLong(),
                 primeClockKHz = (current.primeClockMHz * 1000).toLong(),
+                effClockKHz = (current.effClockMHz * 1000).toLong().takeIf { it > 0L },
                 gpuClockHz = (current.gpuClockMHz * 1_000_000).toLong(),
                 fanSettingsValue = current.fanSettingsValue,
 
@@ -339,6 +347,7 @@ class AppOverrideViewModel @Inject constructor(
                     appName = it.appName,
                     selectedThemeIndex = it.selectedThemeIndex,
                     useAmoledBlack = it.useAmoledBlack,
+                    useGlass = it.useGlass,
                 )
             }
         }

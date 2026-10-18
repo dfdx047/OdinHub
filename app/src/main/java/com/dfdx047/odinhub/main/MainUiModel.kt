@@ -41,6 +41,7 @@ data class MainUiModel(
 
     val selectedThemeIndex: Int = 1,
     val useAmoledBlack: Boolean = false,
+    val useGlass: Boolean = false,
 
     val tdpValue: Float = TdpProfiles.envelope.tripleA,
     /** Perfil de TDP selecionado -- ver TdpProfiles ("custom" = nenhum chip destacado). */
@@ -51,6 +52,8 @@ data class MainUiModel(
     val thermalStatus: ThermalStatus = ThermalStatus(),
     val cpuPerfClock: Float = 0f,
     val cpuPrimeClock: Float = 0f,
+    /** Cluster de eficiência (MHz); 0 = SoC sem esse cluster. */
+    val cpuEffClock: Float = 0f,
     val gpuClock: Float = 0f,
     val activeLimitMode: String = "TDP",
     val fanMode: Int = 0,

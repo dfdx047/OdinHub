@@ -15,15 +15,17 @@ enum class SocFamily(
     /** Núcleos do cluster "Prime" (a política mais rápida). */
     val primeCores: String,
     val gpuName: String,
+    /** Núcleos do cluster de eficiência (vazio = o SoC não tem um terceiro cluster). */
+    val effCores: String = "",
 ) {
     /** Snapdragon 8 Elite (SM8750 / CQ8725S, "sun") -- Odin 3. */
     SM8750("Snapdragon 8 Elite", "6× Oryon M", "2× Oryon L", "Adreno 830"),
 
     /** Snapdragon 8 Gen 2 (QCS8550 / SM8550, "kalama") -- Odin 2, Thor, RP6, RP Nova. */
-    KALAMA("Snapdragon 8 Gen 2", "2× A715 + 2× A710", "1× X3", "Adreno 740"),
+    KALAMA("Snapdragon 8 Gen 2", "2× A715 + 2× A710", "1× X3", "Adreno 740", "3× A510"),
 
     /** Snapdragon 865 (SM8250, "kona") -- RP5, RP Mini, Thor Lite. */
-    KONA("Snapdragon 865", "3× A77", "1× A77", "Adreno 650"),
+    KONA("Snapdragon 865", "3× A77", "1× A77", "Adreno 650", "4× A55"),
 
     /** Dimensity 1100 / Kompanio 1300T (MT8797 / MT6891) -- Retroid Pocket 4 Pro. */
     MTK_D1100("Dimensity 1100", "4× A55", "4× A78", "Mali-G77"),
@@ -136,6 +138,8 @@ object SocTables {
         primeMHz = kHz(595200, 729600, 864000, 998400, 1132800, 1248000, 1363200, 1478400, 1593600, 1708800, 1843200, 1977600, 2092800, 2227200, 2342400, 2476800, 2592000, 2726400, 2841600, 2956800, 3187200),
         gpuMHz = listOf(124, 220, 295, 348, 401, 475, 550, 615, 680),
         source = ClockTables.SOURCE_FALLBACK,
+        // policy0: 3x Cortex-A510 até 2016 MHz.
+        effMHz = kHz(307200, 441600, 556800, 672000, 787200, 902400, 1017600, 1113600, 1228800, 1344000, 1459200, 1555200, 1670400, 1785600, 1900800, 2016000),
     )
 
     /**
@@ -147,6 +151,8 @@ object SocTables {
         primeMHz = kHz(844800, 960000, 1075200, 1190400, 1305600, 1401600, 1516800, 1632000, 1747200, 1862400, 1977600, 2073600, 2169600, 2265600, 2361600, 2457600, 2553600, 2649600, 2745600, 2841600),
         gpuMHz = listOf(305, 400, 441, 490, 525, 587, 670),
         source = ClockTables.SOURCE_FALLBACK,
+        // policy0: 4x Cortex-A55 até 1804 MHz.
+        effMHz = kHz(300000, 403200, 518400, 614400, 691200, 787200, 883200, 979200, 1075200, 1171200, 1248000, 1344000, 1420800, 1516800, 1612800, 1708800, 1804800),
     )
 
     /**

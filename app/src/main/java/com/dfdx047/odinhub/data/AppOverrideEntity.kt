@@ -56,4 +56,10 @@ data class AppOverrideEntity(
     // (mapeamento nativo), passos codificados = macro própria deste jogo.
     val m1Macro: String? = null,
     val m2Macro: String? = null,
+
+    /**
+     * v8: teto do cluster de EFICIÊNCIA (3x A510 no 8 Gen 2, 4x A55 no 865), em kHz. `null` =
+     * segue o global. Em SoCs só com dois clusters (8 Elite, MediaTek) é ignorado.
+     */
+    val effClockKHz: Long? = null,
 )

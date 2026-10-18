@@ -26,7 +26,8 @@ object AppInfo {
      */
     const val GITHUB_URL = "https://github.com/dfdx047/OdinHub"
 
-    const val RELEASES_URL = "$GITHUB_URL/releases/latest"
+    /** Lista de releases: `/releases/latest` dá 404 enquanto nenhuma release estiver PUBLICADA (rascunhos não contam). */
+    const val RELEASES_URL = "$GITHUB_URL/releases"
 
     /** Descrição curta mostrada no cartão "Sobre". */
     const val TAGLINE_PT =

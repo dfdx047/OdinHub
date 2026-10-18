@@ -39,7 +39,7 @@ class HomeGestureDetector(
 
     /** Devolve `true` se o evento foi consumido (gestos ligados e é o Home). */
     fun onKeyEvent(event: KeyEvent): Boolean {
-        if (event.keyCode != KeyEvent.KEYCODE_HOME) return false
+        if (!isHomeKey(event.keyCode)) return false
         val cfg = config()
         if (!cfg.enabled) {
             reset()
@@ -74,6 +74,13 @@ class HomeGestureDetector(
         }
         return true
     }
+
+    /**
+     * O Home do sistema (KEYCODE_HOME) e o botão "Home/Guia" do comando (KEYCODE_BUTTON_MODE):
+     * conforme o firmware, o botão Home da consola chega como um ou como o outro -- e o detetor
+     * só ouvia o primeiro.
+     */
+    private fun isHomeKey(code: Int): Boolean = code == KeyEvent.KEYCODE_HOME || code == KeyEvent.KEYCODE_BUTTON_MODE
 
     fun reset() {
         handler.removeCallbacks(longPressRunnable)

@@ -207,7 +207,8 @@ class ForegroundAppWatcherService : AccessibilityService() {
             val perfKHz = override?.perfClockKHz ?: (prefs.cpuPerfClock * 1000).toLong()
             val primeKHz = override?.primeClockKHz ?: (prefs.cpuPrimeClock * 1000).toLong()
             val gpuHz = override?.gpuClockHz ?: (prefs.gpuClock * 1_000_000).toLong()
-            performanceManager.applyAbsoluteClocks(perfKHz, primeKHz, gpuHz)
+            val effKHz = override?.effClockKHz ?: (prefs.cpuEffClock * 1000).toLong()
+            performanceManager.applyAbsoluteClocks(perfKHz, primeKHz, gpuHz, effKHz)
         }
 
         // 2. Ventoinha baseada no modelo FanMode

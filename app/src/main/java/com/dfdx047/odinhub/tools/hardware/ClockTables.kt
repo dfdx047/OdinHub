@@ -13,8 +13,14 @@ data class ClockTables(
     val primeMHz: List<Int>,
     val gpuMHz: List<Int>,
     val source: String,
+    /**
+     * Cluster de EFICIÊNCIA (o de frequência mais baixa) em SoCs com três clusters: 3x A510 no
+     * 8 Gen 2, 4x A55 no 865. Vazio em SoCs só com dois (8 Elite, MediaTek) -- aí não há chip.
+     */
+    val effMHz: List<Int> = emptyList(),
 ) {
     val isEmpty: Boolean get() = perfMHz.isEmpty() && primeMHz.isEmpty() && gpuMHz.isEmpty()
+    val hasEfficiencyCluster: Boolean get() = effMHz.isNotEmpty()
 
     companion object {
         const val SOURCE_KERNEL = "kernel"

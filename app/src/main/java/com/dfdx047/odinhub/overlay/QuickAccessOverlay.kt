@@ -13,6 +13,7 @@ import android.view.View
 import android.view.WindowManager
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.core.content.getSystemService
 import com.dfdx047.odinhub.data.AppOverrideRepository
 import com.dfdx047.odinhub.data.SharedPrefsRepo
@@ -87,8 +88,10 @@ class QuickAccessOverlay(
 
             newHost.setContent {
                 val expanded by expandedFlow.collectAsState()
-                val rawTheme = AvailableThemes.getOrElse(prefs.selectedThemeIndex) { AvailableThemes[0] }
-                val currentTheme = getResolvedTheme(rawTheme, prefs.useAmoledBlack)
+                // Relê a aparência quando ela muda na app (tema, AMOLED, vidro).
+                val appearance by prefs.appearanceVersion.collectAsState()
+                val rawTheme = remember(appearance) { AvailableThemes.getOrElse(prefs.selectedThemeIndex) { AvailableThemes[0] } }
+                val currentTheme = getResolvedTheme(rawTheme, prefs.useAmoledBlack, prefs.useGlass)
                 val isDllReady = dllImported && prefs.globalLsfgEnabled
 
                 // O pacote em primeiro plano e o mapa de regras vêm de StateFlows observados aqui

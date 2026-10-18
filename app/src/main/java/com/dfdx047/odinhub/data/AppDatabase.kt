@@ -7,7 +7,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [AppOverrideEntity::class],
-    version = 7, // v5: limitMode + valores reais de TDP/Clock/Fan; v6: displayOverride + thermalMode; v7: m1Macro/m2Macro
+    version = 8, // v5: limitMode + valores reais de TDP/Clock/Fan; v6: displayOverride + thermalMode; v7: m1Macro/m2Macro; v8: effClockKHz
     // Antes: exportSchema = false descartava o histórico de schema a cada build -- o plugin
     // `androidx.room` já estava configurado para gravar em `schemas/` (ver bloco `room {}`
     // abaixo), mas isso nunca gerava nada porque o export estava desligado aqui. Com
@@ -108,6 +108,18 @@ abstract class AppDatabase : RoomDatabase() {
                 }
                 if ("m1Macro" !in existing) db.execSQL("ALTER TABLE appoverride ADD COLUMN m1Macro TEXT")
                 if ("m2Macro" !in existing) db.execSQL("ALTER TABLE appoverride ADD COLUMN m2Macro TEXT")
+            }
+        }
+
+        /** v8: teto do cluster de eficiência por jogo. */
+        val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                val existing = mutableSetOf<String>()
+                db.query("PRAGMA table_info(appoverride)").use { cursor ->
+                    val nameIndex = cursor.getColumnIndex("name")
+                    while (cursor.moveToNext()) existing += cursor.getString(nameIndex)
+                }
+                if ("effClockKHz" !in existing) db.execSQL("ALTER TABLE appoverride ADD COLUMN effClockKHz INTEGER")
             }
         }
     }

@@ -5,6 +5,8 @@ import android.net.Uri
 import android.provider.Settings
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -59,13 +61,17 @@ fun PermissionOnboardingWrapper(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color(0xFF0F1115)),
+                .background(Color(0xFF0F1115))
+                .windowInsetsPadding(WindowInsets.systemBars)
+                // Rolagem: na horizontal o cartão não cabia e os botões ficavam escondidos.
+                .verticalScroll(rememberScrollState()),
             contentAlignment = Alignment.Center
         ) {
             // Cartão com efeito translúcido (Glassmorphism)
             Box(
                 modifier = Modifier
-                    .width(620.dp)
+                    .widthIn(max = 620.dp)
+                    .fillMaxWidth()
                     .padding(24.dp)
                     .clip(RoundedCornerShape(24.dp))
                     .background(Color(0x1AFFFFFF)) // Fundo translúcido estilo vidro fosco

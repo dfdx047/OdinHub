@@ -2,6 +2,9 @@ package com.dfdx047.odinhub.overlay
 
 import com.dfdx047.odinhub.ui.theme.onPrimary
 import com.dfdx047.odinhub.ui.theme.scrim
+import com.dfdx047.odinhub.ui.theme.glass
+import com.dfdx047.odinhub.ui.theme.glassEdgeTop
+import com.dfdx047.odinhub.ui.theme.glassEdgeBottom
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -103,8 +106,16 @@ fun QuickAccessContent(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(theme.background.copy(alpha = panelOpacity), RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp))
-                    .border(1.dp, theme.primary.copy(alpha = 0.5f), RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp))
+                    // Vidro: painel translúcido com contorno de luz; o jogo por trás fica desfocado
+                    // pela janela (FLAG_BLUR_BEHIND, ver QuickAccessOverlay) quando o sistema deixa.
+                    .background(
+                        if (theme.glassMode) theme.glass().copy(alpha = (theme.glass().alpha + 0.2f) * panelOpacity) else theme.background.copy(alpha = panelOpacity),
+                        RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp),
+                    )
+                    .then(
+                        if (theme.glassMode) Modifier.border(1.dp, androidx.compose.ui.graphics.Brush.verticalGradient(listOf(theme.glassEdgeTop, theme.glassEdgeBottom)), RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp))
+                        else Modifier.border(1.dp, theme.primary.copy(alpha = 0.5f), RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp)),
+                    )
             ) {
                 QuickAccessPanel(
                     theme = theme,
@@ -195,8 +206,10 @@ private fun QuickAccessPanel(
     // sem coroutine do painel, que era cancelada se o painel fechasse dentro da janela de espera
     // e deixava o hardware num valor diferente do que a UI mostrava.
     fun applyTdpLive(watts: Float) = performanceManager.applyDynamicTdp(watts)
+    // Cluster de eficiência (8 Gen 2 / 865): declarado aqui em cima porque o applyClocksLive o lê.
+    var cpuEffClock by remember(currentPackage) { mutableFloatStateOf(overridesByPackage[currentPackage]?.effClockKHz?.let { it / 1000f } ?: prefs.cpuEffClock) }
     fun applyClocksLive(perfMHz: Float, primeMHz: Float, gpuMHz: Float) =
-        performanceManager.applyAbsoluteClocks((perfMHz * 1000).toLong(), (primeMHz * 1000).toLong(), (gpuMHz * 1_000_000).toLong())
+        performanceManager.applyAbsoluteClocks((perfMHz * 1000).toLong(), (primeMHz * 1000).toLong(), (gpuMHz * 1_000_000).toLong(), (cpuEffClock * 1000).toLong())
 
     // CAUSA RAIZ (auditoria): tudo aqui era lido/escrito só no SharedPrefs (`prefs.getPerApp*`
     // / `prefs.savePerAppConfig`), um armazenamento TOTALMENTE separado da tabela Room que a
@@ -330,6 +343,7 @@ private fun QuickAccessPanel(
             prefs.tdpValue = tdpValue
             prefs.cpuPerfClock = cpuPerfClock
             prefs.cpuPrimeClock = cpuPrimeClock
+            prefs.cpuEffClock = cpuEffClock
             prefs.gpuClock = gpuClock
             prefs.fanMode = fanMode
             return
@@ -345,6 +359,7 @@ private fun QuickAccessPanel(
             tdpWatts = encodedTdp,
             perfClockKHz = (cpuPerfClock * 1000).toLong(),
             primeClockKHz = (cpuPrimeClock * 1000).toLong(),
+            effClockKHz = (cpuEffClock * 1000).toLong().takeIf { it > 0L },
             gpuClockHz = (gpuClock * 1_000_000).toLong(),
             fanSettingsValue = fanMode,
             // Rótulos calculados com o MESMO helper que o ecrã "Per-App Overrides" usa
@@ -438,6 +453,20 @@ private fun QuickAccessPanel(
                 Column(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(theme.surface.copy(alpha = 0.5f)).padding(12.dp)) {
                     Text((if (isEn) "Background opacity: " else "Opacidade do fundo: ") + "${(panelOpacity * 100).toInt()}%", color = theme.text, fontSize = 11.sp)
                     Slider(value = panelOpacity, onValueChange = onOpacityChange, valueRange = 0.1f..1.0f, colors = SliderDefaults.colors(thumbColor = theme.primary, activeTrackColor = theme.primary))
+                }
+
+                // Atalho para o HUD de desempenho (as métricas configuram-se no Odin Hub > Sistema).
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(if (isEn) "PERFORMANCE HUD" else "HUD DE DESEMPENHO", color = theme.text.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                Spacer(modifier = Modifier.height(8.dp))
+                val hudConfig by prefs.hudConfigFlow.collectAsState()
+                val hudHidden by com.dfdx047.odinhub.service.PerformanceHudService.hiddenFlow.collectAsState()
+                val hudOn = hudConfig.enabled && !hudHidden
+                Row(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(theme.surface.copy(alpha = 0.5f)).clickable {
+                    com.dfdx047.odinhub.service.PerformanceHudService.toggle(context, prefs)
+                }.padding(12.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Text(if (isEn) "Show FPS / temperatures HUD" else "Mostrar HUD de FPS / temperaturas", color = theme.text, fontSize = 11.sp, modifier = Modifier.weight(1f))
+                    Text(if (hudOn) "ON" else "OFF", color = if (hudOn) theme.primary else theme.text.copy(alpha = 0.5f), fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 }
 
                 if (FeatureFlags.GRAPHICS_ENGINE_AVAILABLE) {
@@ -710,7 +739,7 @@ private fun QuickAccessPanel(
                         Spacer(modifier = Modifier.height(8.dp))
                         Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                             for (prof in userClockProfiles) {
-                                Box(modifier = Modifier.clip(RoundedCornerShape(6.dp)).background(theme.surface.copy(alpha = 0.5f)).clickable { cpuPerfClock = prof.v2; cpuPrimeClock = prof.v3; gpuClock = prof.v4; applyClocksLive(prof.v2, prof.v3, prof.v4); persistOverride() }.padding(horizontal = 12.dp, vertical = 8.dp), contentAlignment = Alignment.Center) {
+                                Box(modifier = Modifier.clip(RoundedCornerShape(6.dp)).background(theme.surface.copy(alpha = 0.5f)).clickable { cpuPerfClock = prof.v2; cpuPrimeClock = prof.v3; gpuClock = prof.v4; if (prof.v5 > 0f) cpuEffClock = prof.v5; applyClocksLive(prof.v2, prof.v3, prof.v4); persistOverride() }.padding(horizontal = 12.dp, vertical = 8.dp), contentAlignment = Alignment.Center) {
                                     Text(prof.name, color = theme.text, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                                 }
                             }
@@ -722,6 +751,17 @@ private fun QuickAccessPanel(
                         // 8 Elite só aceita as frequências da sua tabela de cpufreq, por isso cada
                         // chip é um valor que o hardware suporta mesmo. Mesmo componente do ecrã
                         // de Settings (ClockChipRow), com subconjunto curado + "Todos".
+                        if (clockTables.hasEfficiencyCluster) {
+                            ClockChipRow(
+                                title = (if (isEn) "Efficiency Cluster" else "Cluster Eficiência") + soc.effCores.takeIf { it.isNotBlank() }?.let { " ($it)" }.orEmpty(),
+                                currentMHz = if (cpuEffClock > 0f) cpuEffClock else (clockTables.effMHz.lastOrNull()?.toFloat() ?: 0f),
+                                tableMHz = clockTables.effMHz,
+                                enabled = true,
+                                theme = theme,
+                                isEn = isEn,
+                            ) { mhz -> cpuEffClock = mhz.toFloat(); applyClocksLive(cpuPerfClock, cpuPrimeClock, gpuClock); persistOverride() }
+                            Spacer(modifier = Modifier.height(12.dp))
+                        }
                         ClockChipRow(
                             title = (if (isEn) "Perf Cluster" else "Cluster Perf") + soc.perfCores.takeIf { it.isNotBlank() }?.let { " ($it)" }.orEmpty(),
                             currentMHz = cpuPerfClock,
@@ -752,7 +792,7 @@ private fun QuickAccessPanel(
                     Spacer(modifier = Modifier.height(12.dp))
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                         OutlinedTextField(value = savedPresetName, onValueChange = { savedPresetName = it }, label = { Text(if (isEn) "Preset name" else "Nome do preset", fontSize = 10.sp) }, modifier = Modifier.weight(1f).height(50.dp), textStyle = TextStyle(fontSize = 12.sp, color = theme.text))
-                        Button(onClick = { if (savedPresetName.isNotBlank()) { prefs.saveCustomProfile(savedPresetName, "CLOCK", 0f, cpuPerfClock, cpuPrimeClock, gpuClock); savedPresetName = "" } }, colors = ButtonDefaults.buttonColors(containerColor = theme.primary), modifier = Modifier.height(50.dp)) { Text(if (isEn) "Save" else "Salvar", fontSize = 11.sp, color = theme.onPrimary) }
+                        Button(onClick = { if (savedPresetName.isNotBlank()) { prefs.saveCustomProfile(savedPresetName, "CLOCK", 0f, cpuPerfClock, cpuPrimeClock, gpuClock, cpuEffClock); savedPresetName = "" } }, colors = ButtonDefaults.buttonColors(containerColor = theme.primary), modifier = Modifier.height(50.dp)) { Text(if (isEn) "Save" else "Salvar", fontSize = 11.sp, color = theme.onPrimary) }
                     }
                 }
             }

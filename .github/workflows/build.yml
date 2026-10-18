@@ -10,6 +10,10 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      ODINHUB_KEYSTORE_PASSWORD: ${{ secrets.ODINHUB_KEYSTORE_PASSWORD }}
+      ODINHUB_KEY_ALIAS: ${{ secrets.ODINHUB_KEY_ALIAS }}
+      ODINHUB_KEY_PASSWORD: ${{ secrets.ODINHUB_KEY_PASSWORD }}
     # Usado pelo job "release" abaixo para saber se ja correu o build com sucesso e
     # onde ficou o APK, sem repetir a compilacao.
     outputs:
@@ -28,6 +32,19 @@ jobs:
 
       - name: Dar permissao de execucao ao Gradle
         run: chmod +x gradlew
+
+      # Chave de assinatura estavel (auto-update). So existe se os segredos estiverem
+      # configurados no GitHub (Settings > Secrets and variables > Actions):
+      #   ODINHUB_KEYSTORE_BASE64, ODINHUB_KEYSTORE_PASSWORD, ODINHUB_KEY_ALIAS, ODINHUB_KEY_PASSWORD
+      # Sem eles, o build continua a funcionar com a chave de debug do runner.
+      - name: Preparar a chave de assinatura
+        env:
+          KEYSTORE_B64: ${{ secrets.ODINHUB_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/odinhub.jks"
+            echo "ODINHUB_KEYSTORE=$RUNNER_TEMP/odinhub.jks" >> "$GITHUB_ENV"
+          fi
 
       # Antes, a CI só rodava assembleDebug -- ou seja, um build que compila mas quebra em
       # runtime (como os bugs corrigidos nesta auditoria) passava verde. testDebugUnitTest roda

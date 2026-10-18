@@ -171,7 +171,7 @@ fun SettingsScreen(viewModel: MainViewModel = hiltViewModel(), navigateToOverrid
     val currentLanguage = if (isEn) "English (US)" else "Português (PT-BR)"
 
     val rawTheme = AvailableThemes.getOrElse(uiState.selectedThemeIndex) { AvailableThemes[0] }
-    val finalTheme = getResolvedTheme(rawTheme, uiState.useAmoledBlack)
+    val finalTheme = getResolvedTheme(rawTheme, uiState.useAmoledBlack, uiState.useGlass)
 
     // Fundo: arranca do que ficou gravado (antes voltava sempre ao padrão ao reabrir a app).
     val savedWallpaper = remember { viewModel.wallpaperSettings() }
@@ -209,6 +209,17 @@ fun SettingsScreen(viewModel: MainViewModel = hiltViewModel(), navigateToOverrid
     // chegava a ser desenhado por ninguém. Sem canal root, TODOS os controlos de hardware da app
     // são inócuos -- o utilizador mexia em tudo e nada acontecia, sem qualquer explicação. Agora
     // é dito à cara.
+    // Auto-update (pop-up de versão nova / progresso do download e da instalação).
+    val updateState by viewModel.updateState.collectAsState()
+    UpdateDialog(
+        state = updateState,
+        theme = finalTheme,
+        isEn = isEn,
+        onInstall = { viewModel.installUpdate(it) },
+        onSkip = { viewModel.skipUpdate(it) },
+        onDismiss = { viewModel.dismissUpdate() },
+    )
+
     if (uiState.showPServerNotAvailableDialog) {
         AlertDialog(
             onDismissRequest = { viewModel.pServerDialogDismissed() },
@@ -414,8 +425,9 @@ fun OdinHubWelcomeScreen(theme: ConsoleTheme, isEn: Boolean, currentThemeIndex: 
     var expandedTheme by remember { mutableStateOf(false) }
     var expandedLang by remember { mutableStateOf(false) }
 
-    Box(modifier = Modifier.fillMaxSize().background(theme.background), contentAlignment = Alignment.Center) {
-        Column(modifier = Modifier.width(420.dp).padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+    // Com rolagem: na horizontal o ecrã é baixo e o botão INICIAR ficava fora do ecrã.
+    Box(modifier = Modifier.fillMaxSize().background(theme.background).windowInsetsPadding(WindowInsets.systemBars), contentAlignment = Alignment.Center) {
+        Column(modifier = Modifier.widthIn(max = 420.dp).fillMaxWidth().verticalScroll(rememberScrollState()).padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             Text(if (isEn) "WELCOME TO ODIN HUB" else "BEM-VINDO AO ODIN HUB", fontSize = 24.sp, fontFamily = theme.fontFamily, fontWeight = FontWeight.Black, color = theme.primary)
 
             ConsoleCard(if (isEn) "Language" else "Idioma", if (isEn) "English (US)" else "Português (PT-BR)", theme, playClick = { expandedLang = true }) {
@@ -579,12 +591,13 @@ fun PerformancePanel(uiState: MainUiModel, viewModel: MainViewModel, theme: Cons
             tables = uiState.clockTables,
             perfMHz = uiState.cpuPerfClock,
             primeMHz = uiState.cpuPrimeClock,
+            effMHz = uiState.cpuEffClock,
             gpuMHz = uiState.gpuClock,
             customProfiles = uiState.customProfiles,
             theme = theme,
             isEn = isEn,
-            onClocks = { perf, prime, gpu -> haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove); viewModel.updateManualClocks(perf, prime, gpu); playClick() },
-            onSavePreset = { name, perf, prime, gpu -> viewModel.saveCustomProfile(name, "CLOCK", 0f, perf, prime, gpu) },
+            onClocks = { perf, prime, gpu, eff -> haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove); viewModel.updateManualClocks(perf, prime, gpu, eff); playClick() },
+            onSavePreset = { name, perf, prime, gpu, eff -> viewModel.saveCustomProfile(name, "CLOCK", 0f, perf, prime, gpu, eff) },
         )
 
         ConsoleSectionHeader(if (isEn) "Thermal" else "Térmico", theme)
@@ -857,6 +870,21 @@ fun SystemPanel(
             }
         }
 
+        // HUD de desempenho (FPS, temperaturas, frequências...), ao lado do overlay lateral.
+        val hudConfig by viewModel.hudConfig.collectAsState()
+        HudSettingsCard(
+            config = hudConfig,
+            theme = theme,
+            isEn = isEn,
+            hasOverlayPermission = Settings.canDrawOverlays(context),
+            onRequestPermission = {
+                context.startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${context.packageName}")))
+                Toast.makeText(context, if (isEn) "Grant the overlay permission" else "Conceda a permissão de sobreposição", Toast.LENGTH_LONG).show()
+            },
+            onChange = { viewModel.updateHudConfig(it) },
+            onShowAgain = { viewModel.showHudAgain(); playClick() },
+        )
+
         ConsoleSectionHeader(if (isEn) "Audio" else "Áudio", theme)
         ConsoleCard(if (isEn) "Background Music" else "Música de Fundo", if (isEn) "Loops while the app is open" else "Toca em loop enquanto a app está aberta", theme) {
             Column(modifier = Modifier.padding(16.dp)) {
@@ -909,6 +937,20 @@ fun SystemPanel(
                 ConsoleToggle(checked = amoledBlack, theme = theme, onCheckedChange = { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove); onAmoledToggle(it); playClick() })
             }
         }
+        // Vidro: vale para TODOS os temas (cartões, overlay lateral e HUD de desempenho).
+        ConsoleCard(if (isEn) "Glass Appearance" else "Aparência de Vidro", if (isEn) "Translucent, Liquid Glass–style surfaces on any theme" else "Superfícies translúcidas, ao estilo Liquid Glass, em qualquer tema", theme, playClick = playClick) {
+            Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(if (isEn) "Glass mode" else "Modo vidro", color = theme.text, fontFamily = theme.fontFamily)
+                    Text(
+                        if (isEn) "Best with a wallpaper. The overlay blurs the game behind it when the system allows."
+                        else "Fica melhor com um wallpaper. O overlay desfoca o jogo por trás quando o sistema permite.",
+                        color = theme.secondaryText, fontFamily = theme.fontFamily, fontSize = 10.sp,
+                    )
+                }
+                ConsoleToggle(checked = uiState.useGlass, theme = theme, onCheckedChange = { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove); viewModel.updateGlass(it); playClick() })
+            }
+        }
 
         ConsoleSectionHeader(if (isEn) "Live Wallpaper & Background" else "Live Wallpaper & Fundo", theme)
         // Os valores guardados continuam "Static"/"Live (MP4)"; só o texto mostrado é traduzido.
@@ -945,7 +987,7 @@ fun SystemPanel(
             }
         }
         ConsoleSectionHeader(if (isEn) "About" else "Sobre", theme)
-        AboutCard(theme = theme, isEn = isEn, playClick = playClick, onReplayBoot = onReplayBoot, deviceLine = "${uiState.device.name} · ${uiState.device.soc.label}")
+        AboutCard(theme = theme, isEn = isEn, playClick = playClick, onReplayBoot = onReplayBoot, deviceLine = "${uiState.device.name} · ${uiState.device.soc.label}", onCheckUpdates = { viewModel.checkForUpdates() })
     }
 }
 
@@ -964,6 +1006,7 @@ private fun AboutCard(
     playClick: () -> Unit,
     onReplayBoot: () -> Unit,
     deviceLine: String,
+    onCheckUpdates: () -> Unit,
 ) {
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
@@ -1000,7 +1043,9 @@ private fun AboutCard(
             Spacer(Modifier.height(16.dp))
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(
-                    onClick = { openUrl(AppInfo.RELEASES_URL) },
+                    // Antes abria /releases/latest no browser -- 404 enquanto não há release
+                    // publicada. Agora verifica dentro da app e oferece a instalação.
+                    onClick = { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove); playClick(); onCheckUpdates() },
                     modifier = Modifier.weight(1f),
                     colors = ButtonDefaults.buttonColors(containerColor = theme.primary),
                 ) {
@@ -1087,14 +1132,21 @@ fun ConsoleCard(title: String, subtitle: String, theme: ConsoleTheme, enabled: B
     val borderColor by animateColorAsState(targetValue = if (isFocused && enabled) theme.primary else subtleBorder, label = "cardBorder")
     val contentAlpha by animateFloatAsState(targetValue = if (enabled) 1f else 0.5f, label = "contentAlpha")
 
+    val cardShape = RoundedCornerShape(theme.cardRadius.dp)
+    // Modo vidro: contorno de luz em degradê (claro em cima) em vez da linha fina uniforme.
+    val edge = if (theme.glassMode && !(isFocused && enabled)) {
+        Modifier.border(1.dp, Brush.verticalGradient(listOf(theme.glassEdgeTop, theme.glassEdgeBottom)), cardShape)
+    } else {
+        Modifier.border(1.dp, borderColor, cardShape)
+    }
     Card(
-        shape = RoundedCornerShape(8.dp),
+        shape = cardShape,
         colors = CardDefaults.cardColors(containerColor = glassSurface),
-        modifier = Modifier.fillMaxWidth().scale(scale).shadow(glow, RoundedCornerShape(8.dp), spotColor = theme.primary, ambientColor = theme.primary).border(1.dp, borderColor, RoundedCornerShape(8.dp)).alpha(contentAlpha)
+        modifier = Modifier.fillMaxWidth().scale(scale).shadow(glow, cardShape, spotColor = theme.primary, ambientColor = theme.primary).then(edge).alpha(contentAlpha)
             .then(if (playClick != null && enabled) Modifier.focusable(interactionSource = interactionSource).clickable(interactionSource = interactionSource, indication = null) { playClick() } else Modifier)
     ) {
         // Reflexo subtil no topo do cartão -- o "vidro" do efeito frosted glass.
-        Column(modifier = Modifier.background(Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.07f), Color.Transparent))).padding(vertical = 12.dp)) {
+        Column(modifier = Modifier.background(Brush.verticalGradient(listOf(theme.glassHighlight, Color.Transparent))).padding(vertical = 12.dp)) {
             Text(title, fontSize = 16.sp, fontFamily = theme.fontFamily, fontWeight = FontWeight.Bold, color = if (isFocused && enabled) theme.primary else theme.text, modifier = Modifier.padding(horizontal = 16.dp))
             if (subtitle.isNotEmpty()) { Text(subtitle, fontSize = 12.sp, fontFamily = theme.fontFamily, color = theme.secondaryText, modifier = Modifier.padding(horizontal = 16.dp).padding(bottom = 12.dp)) } else { Spacer(modifier = Modifier.height(8.dp)) }
             HorizontalDivider(color = theme.text.copy(alpha = 0.1f), thickness = 1.dp)

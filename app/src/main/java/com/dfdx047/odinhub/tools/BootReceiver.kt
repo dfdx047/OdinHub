@@ -77,6 +77,9 @@ class BootReceiver : BroadcastReceiver() {
                 runCatching { thermalManager.reapplyPersisted() }
                     .onFailure { Log.w(TAG, "Limite térmico não pôde ser reaplicado no boot", it) }
 
+                // HUD de desempenho (se ligado). startIfEnabled já apanha a exceção de arranque.
+                com.dfdx047.odinhub.service.PerformanceHudService.startIfEnabled(context, prefs)
+
                 if (prefs.overlayEnabled) {
                     // A partir do Android O, arrancar um serviço a partir de um processo em
                     // segundo plano (que é o caso aqui, no arranque do sistema) lança

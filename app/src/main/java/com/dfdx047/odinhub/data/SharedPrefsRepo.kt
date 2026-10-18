@@ -7,7 +7,8 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
-data class CustomProfile(val name: String, val type: String, val v1: Float, val v2: Float, val v3: Float, val v4: Float)
+/** Preset do utilizador. TDP: v1 = watts. CLOCK: v2 Perf, v3 Prime, v4 GPU, v5 Eficiência (MHz; 0 = não definido). */
+data class CustomProfile(val name: String, val type: String, val v1: Float, val v2: Float, val v3: Float, val v4: Float, val v5: Float = 0f)
 
 @Singleton
 class SharedPrefsRepo @Inject constructor(
@@ -37,6 +38,21 @@ class SharedPrefsRepo @Inject constructor(
     var isFirstRun: Boolean get() = prefs.getBoolean("is_first_run", true); set(value) = prefs.edit().putBoolean("is_first_run", value).apply()
     var selectedThemeIndex: Int get() = prefs.getInt("selected_theme_index", 1); set(value) = prefs.edit().putInt("selected_theme_index", value).apply()
     var useAmoledBlack: Boolean get() = prefs.getBoolean("use_amoled_black", false); set(value) = prefs.edit().putBoolean("use_amoled_black", value).apply()
+    /** Aparência "vidro" por cima do tema (ver ConsoleTheme.glassMode). */
+    var useGlass: Boolean
+        get() = prefs.getBoolean("use_glass", false)
+        set(value) {
+            prefs.edit().putBoolean("use_glass", value).apply()
+            _appearanceVersion.value = _appearanceVersion.value + 1
+        }
+    private val _appearanceVersion = kotlinx.coroutines.flow.MutableStateFlow(0)
+
+    /**
+     * Muda sempre que a aparência muda (tema, AMOLED, vidro): o overlay e o HUD, que vivem fora da
+     * Activity, observam isto para se redesenharem com o tema novo sem reabrir.
+     */
+    val appearanceVersion: kotlinx.coroutines.flow.StateFlow<Int> get() = _appearanceVersion
+    fun notifyAppearanceChanged() { _appearanceVersion.value = _appearanceVersion.value + 1 }
     var overlayEnabled: Boolean get() = prefs.getBoolean("overlay_enabled", false); set(value) = prefs.edit().putBoolean("overlay_enabled", value).apply()
     var overlayHandleOpacity: Float get() = prefs.getFloat("overlay_handle_opacity", 0.5f); set(value) = prefs.edit().putFloat("overlay_handle_opacity", value).apply()
     var overlayHandleWidth: Int get() = prefs.getInt("overlay_handle_width", 22); set(value) = prefs.edit().putInt("overlay_handle_width", value).apply()
@@ -132,6 +148,8 @@ class SharedPrefsRepo @Inject constructor(
     var cpuPerfClock: Float get() = prefs.getFloat("cpu_perf_clock", defaultClocks.perfMHz.lastOrNull()?.toFloat() ?: 3530f); set(value) = prefs.edit().putFloat("cpu_perf_clock", value).apply()
     var cpuPrimeClock: Float get() = prefs.getFloat("cpu_prime_clock", defaultClocks.primeMHz.lastOrNull()?.toFloat() ?: 4320f); set(value) = prefs.edit().putFloat("cpu_prime_clock", value).apply()
     var gpuClock: Float get() = prefs.getFloat("gpu_clock", defaultClocks.gpuMHz.lastOrNull()?.toFloat() ?: 1100f); set(value) = prefs.edit().putFloat("gpu_clock", value).apply()
+    /** Cluster de eficiência (8 Gen 2 / 865). 0 = SoC sem esse cluster. */
+    var cpuEffClock: Float get() = prefs.getFloat("cpu_eff_clock", defaultClocks.effMHz.lastOrNull()?.toFloat() ?: 0f); set(value) = prefs.edit().putFloat("cpu_eff_clock", value).apply()
     private val defaultClocks get() = com.dfdx047.odinhub.tools.DeviceRegistry.current.fallbackTables
 
     var globalLsfgEnabled: Boolean get() = prefs.getBoolean("global_lsfg_enabled", false); set(value) = prefs.edit().putBoolean("global_lsfg_enabled", value).apply()
@@ -153,8 +171,8 @@ class SharedPrefsRepo @Inject constructor(
     // pelo overlay e nunca pela aba Performance -> Per-App Overrides, o que fazia os dois
     // ecrãs nunca concordarem entre si. Ver AppOverrideRepository -- agora fonte única.
 
-    fun saveCustomProfile(name: String, type: String, val1: Float, val2: Float, val3: Float, val4: Float) {
-        prefs.edit().putString("custom_profile_${name}_type", type).putFloat("custom_profile_${name}_v1", val1).putFloat("custom_profile_${name}_v2", val2).putFloat("custom_profile_${name}_v3", val3).putFloat("custom_profile_${name}_v4", val4).apply()
+    fun saveCustomProfile(name: String, type: String, val1: Float, val2: Float, val3: Float, val4: Float, val5: Float = 0f) {
+        prefs.edit().putString("custom_profile_${name}_type", type).putFloat("custom_profile_${name}_v1", val1).putFloat("custom_profile_${name}_v2", val2).putFloat("custom_profile_${name}_v3", val3).putFloat("custom_profile_${name}_v4", val4).putFloat("custom_profile_${name}_v5", val5).apply()
         _customProfilesFlow.value = getAllCustomProfiles()
     }
 
@@ -164,7 +182,7 @@ class SharedPrefsRepo @Inject constructor(
             // removePrefix/removeSuffix: o replace() antigo também apagava "_type" do MEIO do
             // nome ("meu_type_x" virava "meu_x" e os valores eram lidos de chaves inexistentes).
             val name = key.removePrefix("custom_profile_").removeSuffix("_type")
-            profiles.add(CustomProfile(name, prefs.getString(key, "TDP") ?: "TDP", prefs.getFloat("custom_profile_${name}_v1", 0f), prefs.getFloat("custom_profile_${name}_v2", 0f), prefs.getFloat("custom_profile_${name}_v3", 0f), prefs.getFloat("custom_profile_${name}_v4", 0f)))
+            profiles.add(CustomProfile(name, prefs.getString(key, "TDP") ?: "TDP", prefs.getFloat("custom_profile_${name}_v1", 0f), prefs.getFloat("custom_profile_${name}_v2", 0f), prefs.getFloat("custom_profile_${name}_v3", 0f), prefs.getFloat("custom_profile_${name}_v4", 0f), prefs.getFloat("custom_profile_${name}_v5", 0f)))
         }
         return profiles.sortedBy { it.name.lowercase() }
     }
@@ -183,6 +201,44 @@ class SharedPrefsRepo @Inject constructor(
     var wallpaperStatic: Int get() = prefs.getInt("wallpaper_static", 1); set(value) = prefs.edit().putInt("wallpaper_static", value).apply()
     var wallpaperCustomUri: String? get() = prefs.getString("wallpaper_custom_uri", null); set(value) = prefs.edit().putString("wallpaper_custom_uri", value).apply()
     var wallpaperName: String? get() = prefs.getString("wallpaper_name", null); set(value) = prefs.edit().putString("wallpaper_name", value).apply()
+
+    // ---- HUD de desempenho (ver HudConfig / PerformanceHudService) ----
+    var hudConfig: com.dfdx047.odinhub.models.HudConfig
+        get() {
+            val d = com.dfdx047.odinhub.models.HudConfig()
+            return com.dfdx047.odinhub.models.HudConfig(
+                enabled = prefs.getBoolean("hud_enabled", d.enabled),
+                layout = runCatching { com.dfdx047.odinhub.models.HudLayout.valueOf(prefs.getString("hud_layout", d.layout.name)!!) }.getOrDefault(d.layout),
+                position = runCatching { com.dfdx047.odinhub.models.HudPosition.valueOf(prefs.getString("hud_position", d.position.name)!!) }.getOrDefault(d.position),
+                metrics = com.dfdx047.odinhub.models.HudConfig.decodeMetrics(prefs.getString("hud_metrics", null)),
+                textScale = prefs.getFloat("hud_text_scale", d.textScale),
+                backgroundOpacity = prefs.getFloat("hud_bg_opacity", d.backgroundOpacity),
+            )
+        }
+        set(value) {
+            prefs.edit()
+                .putBoolean("hud_enabled", value.enabled)
+                .putString("hud_layout", value.layout.name)
+                .putString("hud_position", value.position.name)
+                .putString("hud_metrics", com.dfdx047.odinhub.models.HudConfig.encodeMetrics(value.metrics))
+                .putFloat("hud_text_scale", value.textScale)
+                .putFloat("hud_bg_opacity", value.backgroundOpacity)
+                .apply()
+            _hudConfigFlow.value = value
+        }
+    private val _hudConfigFlow by lazy { kotlinx.coroutines.flow.MutableStateFlow(hudConfig) }
+
+    /** Versão reativa de [hudConfig]: o serviço do HUD redesenha-se ao mexer nas definições. */
+    val hudConfigFlow: kotlinx.coroutines.flow.StateFlow<com.dfdx047.odinhub.models.HudConfig> get() = _hudConfigFlow
+
+    /** Posição arrastada do HUD (px a partir do canto escolhido); -1 = posição do canto. */
+    var hudOffsetX: Int get() = prefs.getInt("hud_offset_x", -1); set(value) = prefs.edit().putInt("hud_offset_x", value).apply()
+    var hudOffsetY: Int get() = prefs.getInt("hud_offset_y", -1); set(value) = prefs.edit().putInt("hud_offset_y", value).apply()
+
+    // ---- Auto-update ----
+    var lastUpdateCheck: Long get() = prefs.getLong("last_update_check", 0L); set(value) = prefs.edit().putLong("last_update_check", value).apply()
+    /** Release que o utilizador mandou ignorar ("ignorar esta versão"). */
+    var skippedUpdateTag: String? get() = prefs.getString("skipped_update_tag", null); set(value) = prefs.edit().putString("skipped_update_tag", value).apply()
 
     /** Último aparelho anunciado como "detetado" (para o aviso aparecer uma vez por aparelho). */
     var lastDetectedDeviceId: String? get() = prefs.getString("last_detected_device", null); set(value) = prefs.edit().putString("last_detected_device", value).apply()

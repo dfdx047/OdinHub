@@ -12,6 +12,7 @@ enum class ButtonAction(val id: String, val labelEn: String, val labelPt: String
     SCREENSHOT("screenshot", "Screenshot", "Captura de ecrã"),
     SCREEN_RECORD("screen_record", "Start/stop screen recording", "Iniciar/parar gravação de ecrã"),
     TOGGLE_OVERLAY("toggle_overlay", "Open/close Odin Hub overlay", "Abrir/fechar overlay do Odin Hub"),
+    TOGGLE_HUD("toggle_hud", "Show/hide performance HUD", "Mostrar/esconder HUD de desempenho"),
     NOTIFICATIONS("notifications", "Notifications", "Notificações"),
     QUICK_SETTINGS("quick_settings", "Quick settings", "Definições rápidas"),
     POWER_MENU("power_menu", "Power menu", "Menu de energia"),

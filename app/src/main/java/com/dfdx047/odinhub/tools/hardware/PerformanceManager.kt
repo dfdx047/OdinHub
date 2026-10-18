@@ -50,6 +50,8 @@ data class PerfTargets(
     val watts: Float = 0f,
     /** Muda a cada troca de MODO (não a cada watt): o AutoTDP só recomeça do zero nessa altura. */
     val generation: Long = 0,
+    /** Só em [PerfMode.CLOCKS]: cluster de eficiência; `null` = segue o Perf. */
+    val effRatio: Float? = null,
 )
 
 /** Porque é que o AutoTDP está em pausa (mantém os tetos atuais sem os mexer). */
@@ -156,7 +158,11 @@ class PerformanceManager @Inject constructor(
         }
     }
 
-    fun applyAbsoluteClocks(perfClockKHz: Long, primeClockKHz: Long, gpuClockHz: Long) {
+    /**
+     * Clocks manuais. [effClockKHz] é o cluster de eficiência (8 Gen 2 / 865); `null` ou <= 0 =
+     * segue o ratio do Perf, como antes.
+     */
+    fun applyAbsoluteClocks(perfClockKHz: Long, primeClockKHz: Long, gpuClockHz: Long, effClockKHz: Long? = null) {
         val (perfRatio, primeRatio) = PerformanceCommandBuilder.absoluteClocksToRatios(
             perfClockKHz = perfClockKHz,
             primeClockKHz = primeClockKHz,
@@ -166,7 +172,10 @@ class PerformanceManager @Inject constructor(
         )
         setTargets { current ->
             val generation = if (current.mode == PerfMode.CLOCKS) current.generation else current.generation + 1
-            PerfTargets(PerfMode.CLOCKS, perfRatio, primeRatio, gpuClockHz, generation = generation)
+            val effRatio = PerformanceCommandBuilder.effClockToRatio(
+                effClockKHz, policies, device.fallbackTables.effMHz.lastOrNull()?.let { it * 1000L },
+            )
+            PerfTargets(PerfMode.CLOCKS, perfRatio, primeRatio, gpuClockHz, generation = generation, effRatio = effRatio)
         }
     }
 
@@ -206,11 +215,15 @@ class PerformanceManager @Inject constructor(
         val perf = ClockTableCuration.kHzToMHz(sorted.getOrNull(sorted.lastIndex - 1)?.availableFreqsKHz.orEmpty())
         val gpuMHz = ClockTableCuration.hzToMHz(gpu.availableHz)
         val allFromKernel = perf.isNotEmpty() && prime.isNotEmpty() && gpuMHz.isNotEmpty()
+        // Eficiência = a política mais lenta, só quando há três ou mais (8 Gen 2, 865).
+        val eff = if (sorted.size >= 3) ClockTableCuration.kHzToMHz(sorted.first().availableFreqsKHz) else emptyList()
+        val effFallback = if (sorted.size >= 3 || sorted.isEmpty()) fallback.effMHz else emptyList()
         _clockTables.value = ClockTables(
             perfMHz = perf.ifEmpty { fallback.perfMHz },
             primeMHz = prime.ifEmpty { fallback.primeMHz },
             gpuMHz = gpuMHz.ifEmpty { fallback.gpuMHz },
             source = if (allFromKernel) ClockTables.SOURCE_KERNEL else ClockTables.SOURCE_FALLBACK,
+            effMHz = eff.ifEmpty { effFallback },
         )
         Log.i(TAG, "${device.name}: ${policies.size} políticas, GPU=${gpu::class.simpleName} (${gpu.availableHz.size} OPPs), PPM=$ppmAvailable, tabelas=${_clockTables.value.source}")
     }
@@ -226,7 +239,14 @@ class PerformanceManager @Inject constructor(
                 CpuPolicyNode(
                     policyPath = dir.absolutePath,
                     cpuinfoMaxFreqKHz = max,
-                    availableFreqsKHz = parseFreqList(readLocal("${dir.absolutePath}/scaling_available_frequencies")),
+                    // Os OPPs "boost" (os mais altos, em muitos kernels Qualcomm) NÃO aparecem em
+                    // scaling_available_frequencies, só em scaling_boost_frequencies -- sem os
+                    // juntar faltavam as frequências de topo nos chips (ex: no 8 Elite).
+                    availableFreqsKHz = (
+                        parseFreqList(readLocal("${dir.absolutePath}/scaling_available_frequencies")) +
+                            parseFreqList(readLocal("${dir.absolutePath}/scaling_boost_frequencies")) +
+                            listOf(max)
+                        ).filter { it in 1..max }.distinct().sorted().takeIf { it.size > 1 }.orEmpty(),
                 )
             }
             ?.sortedBy { it.policyPath }
@@ -274,7 +294,7 @@ class PerformanceManager @Inject constructor(
                     }
 
                     PerfMode.CLOCKS -> {
-                        enforce(t.perfRatio, t.primeRatio, t.gpuHz, PerformanceCommandBuilder.MANUAL_MIN_RATIO)
+                        enforce(t.perfRatio, t.primeRatio, t.gpuHz, PerformanceCommandBuilder.MANUAL_MIN_RATIO, t.effRatio)
                         appliedGeneration = t.generation
                         _autoTdp.value = AutoTdpTelemetry(active = false)
                         // Re-afirma de vez em quando (um daemon do fabricante pode repor os nós).
@@ -363,10 +383,10 @@ class PerformanceManager @Inject constructor(
 
     // ------------------------------------------------------------------ escrita
 
-    private fun enforce(perfRatio: Float, primeRatio: Float, gpuHz: Long, minRatio: Float) {
+    private fun enforce(perfRatio: Float, primeRatio: Float, gpuHz: Long, minRatio: Float, effRatio: Float? = null) {
         if (policies.isEmpty()) policies = scanCpuPolicies()
         val ops = ArrayList<HardwareWriteOp>()
-        val cpuOps = PerformanceCommandBuilder.buildCpuFrequencyOps(policies, perfRatio, primeRatio, minRatio)
+        val cpuOps = PerformanceCommandBuilder.buildCpuFrequencyOps(policies, perfRatio, primeRatio, minRatio, effRatio)
         ops += cpuOps
 
         // Pisos do firmware: no Thor/RP6 o `pservice` sobe `scaling_min_freq` conforme o modo de

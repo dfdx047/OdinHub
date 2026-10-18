@@ -36,7 +36,7 @@ class AppOverrideListViewModel @Inject constructor(
         // Lido no arranque do ViewModel (que é recriado a cada navegação para este ecrã), por isso
         // uma mudança de tema feita em Settings já aparece aqui da próxima vez que se entra.
         _uiState.update {
-            it.copy(selectedThemeIndex = prefs.selectedThemeIndex, useAmoledBlack = prefs.useAmoledBlack)
+            it.copy(selectedThemeIndex = prefs.selectedThemeIndex, useAmoledBlack = prefs.useAmoledBlack, useGlass = prefs.useGlass)
         }
 
         // Todo o trabalho pesado (PackageManager: lista de apps, ícones, nomes) DENTRO do flow, antes

@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/dfdx047/OdinHub/releases/latest"><img src="https://img.shields.io/github/v/release/dfdx047/OdinHub?include_prereleases&label=download&style=for-the-badge" alt="Latest release"></a>
+  <a href="https://github.com/dfdx047/OdinHub/releases"><img src="https://img.shields.io/github/v/release/dfdx047/OdinHub?include_prereleases&label=download&style=for-the-badge" alt="Latest release"></a>
   <img src="https://img.shields.io/badge/devices-Odin%202%20%7C%20Odin%203%20%7C%20Thor%20%7C%20Retroid-7c6cf0?style=for-the-badge" alt="AYN Odin / Thor / Retroid Pocket">
   <img src="https://img.shields.io/badge/root-not%20required-2ea44f?style=for-the-badge" alt="No root required">
 </p>
@@ -77,7 +77,7 @@ Change a game in one place and the other reflects it. There is no second source 
 ### Performance
 - **Dynamic TDP (AutoTDP)** — a closed loop that measures real-time power draw on the battery and walks CPU/GPU clocks until the device settles at your target wattage. It filters the noisy battery reading, cuts fast when over budget and raises slowly when under (no saw-tooth stutter), and — when the GPU is the bottleneck — takes the cut from the CPU instead (and vice versa). It pauses while charging (the battery can't measure the device then) and with the screen off.
 - **TDP profiles** — Power Save, Balanced and Triple A, sized for **the device it's running on** (11 / 12.5 / 15 W on the Odin 3; less on an 8 Gen 2 or a Snapdragon 865), plus Stock (no limit). Profiles are independent from the free slider.
-- **Per-cluster clock control** — the real frequencies of each CPU cluster (Perf / Prime) and the GPU, read live from the kernel's OPP tables, with a static per-SoC table as fallback. Only one of TDP or manual clocks is active at a time.
+- **Per-cluster clock control** — the real frequencies of each CPU cluster (Efficiency / Perf / Prime on three-cluster chips like the 8 Gen 2 and 865, including the top "boost" OPPs) and the GPU, read live from the kernel's OPP tables, with a static per-SoC table as fallback. Only one of TDP or manual clocks is active at a time.
 - **Thermal limit** — optionally move the first-stage passive trip points of the CPU/GPU thermal zones (85 / 90 / 95 °C or unthrottled), globally or per game. Written through PServerBinder like everything else — no KernelSU/Magisk needed. Emergency trips and **fan trips** are never touched, and Stock restores the factory values (the backup is tied to the current boot, so it can never "restore" a modified value).
 - **Fan control** — Stock, Quiet, Smart and Sport, mapped to the device's real fan modes.
 - **Custom profiles** — save your own TDP or clock presets by name.
@@ -91,7 +91,15 @@ Change a game in one place and the other reflects it. There is no second source 
 - **Home button gestures** — single, double, triple tap and long press, each mapped to a system action: screenshot, full-screen recording (no app picker, saved to Movies/OdinHub), overlay toggle, recents, notifications, lock screen and more.
 - Bind a physical button to open the in-game overlay.
 
+### Performance HUD
+- A small MangoHud-style overlay over **any app**: FPS, frame time (with a graph), CPU load and temperature, per-cluster or per-core clocks, GPU load / temperature / clock, RAM, power draw, battery % and temperature, TDP target and the time.
+- **Everything is optional** — switch each metric on or off. Horizontal bar or vertical panel, five anchor positions, drag to move, three text sizes, adjustable background.
+- Follows the app's theme, including Glass mode. **Double-tap to hide**; bring it back from the side overlay, the Home gesture "Show/hide performance HUD", or Settings.
+- Cheap: everything is read straight from sysfs except FPS/frame time and CPU load, which share a single PServerBinder call per second — and sampling stops while the HUD is hidden or the screen is off.
+
 ### Interface
+- **Glass appearance** — a Liquid Glass–style mode that works on top of every theme: translucent surfaces with a light edge; the side overlay also blurs the game behind it when the system allows.
+- **Auto-update** — Odin Hub checks GitHub for a newer release, shows a pop-up with the release notes, downloads the APK and installs it in place through PServerBinder (or hands it to the Android installer).
 - Seven console-inspired themes (Odin OS, Cyberpunk, SNES, NES, PlayStation, Xbox, Steam OS) plus a Light theme, Material You dynamic colors, and an AMOLED black mode.
 - D-pad navigable with haptic feedback and focus glow.
 - Animated boot sequence, custom wallpapers, and an integrated BGM/SFX mixer.
@@ -139,9 +147,30 @@ Foreground-app detection runs through an accessibility service, with a `UsageSta
 
 ## Installing
 
-1. Download the latest APK from the [Releases](https://github.com/dfdx047/OdinHub/releases/latest) page.
+1. Download the latest APK from the [Releases](https://github.com/dfdx047/OdinHub/releases) page.
 2. Install it on your device.
 3. Launch it and grant the two permissions it asks for.
+
+## Signing (needed for auto-update)
+
+Android only installs an update signed with **the same key** as the installed app. Debug keys differ from machine to machine (and on every CI run), so set up one release key once:
+
+```bash
+keytool -genkeypair -v -keystore odinhub.jks -alias odinhub -keyalg RSA -keysize 4096 -validity 36500
+```
+
+Locally, create `keystore.properties` in the project root (it's git-ignored):
+
+```properties
+storeFile=odinhub.jks
+storePassword=YOUR_PASSWORD
+keyAlias=odinhub
+keyPassword=YOUR_PASSWORD
+```
+
+For GitHub Actions, add these repository secrets: `ODINHUB_KEYSTORE_BASE64` (output of `base64 -w0 odinhub.jks`), `ODINHUB_KEYSTORE_PASSWORD`, `ODINHUB_KEY_ALIAS`, `ODINHUB_KEY_PASSWORD`. Both debug and release builds then use that key. Without it, builds still work with the debug key.
+
+Releases must be **published** (not left as drafts) for the in-app updater to see them.
 
 ## Building
 

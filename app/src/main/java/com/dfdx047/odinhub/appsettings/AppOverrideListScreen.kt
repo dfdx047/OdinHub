@@ -46,7 +46,7 @@ fun AppOverrideListScreen(viewModel: AppOverrideListViewModel = hiltViewModel(),
     // único da app a ignorar o motor de temas -- daí parecer "de outro aplicativo". Agora segue o
     // mesmo ConsoleTheme (e o modo AMOLED) que o resto da interface.
     val rawTheme = AvailableThemes.getOrElse(uiState.selectedThemeIndex) { AvailableThemes[0] }
-    val theme = getResolvedTheme(rawTheme, uiState.useAmoledBlack)
+    val theme = getResolvedTheme(rawTheme, uiState.useAmoledBlack, uiState.useGlass)
 
     if (uiState.showAppSelectDialog) {
         AppPickerDialog(

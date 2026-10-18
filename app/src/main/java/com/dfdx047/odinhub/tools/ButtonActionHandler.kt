@@ -76,6 +76,7 @@ class ButtonActionHandler @Inject constructor(
             ButtonAction.POWER_MENU -> service?.performGlobalAction(AccessibilityService.GLOBAL_ACTION_POWER_DIALOG)
             ButtonAction.LOCK_SCREEN -> service?.performGlobalAction(AccessibilityService.GLOBAL_ACTION_LOCK_SCREEN)
             ButtonAction.TOGGLE_OVERLAY -> GamingOverlayService.toggleOverlayFlow.tryEmit(Unit)
+            ButtonAction.TOGGLE_HUD -> com.dfdx047.odinhub.service.PerformanceHudService.toggle(context, prefs)
             ButtonAction.SCREEN_RECORD -> toggleScreenRecording()
             ButtonAction.CLOSE_APP -> closeForegroundGame(service)
         }

@@ -15,14 +15,43 @@ android {
         applicationId = "com.dfdx047.odinhub"
         minSdk = 33
         targetSdk = 35
-        versionCode = 14
-        versionName = "0.8"
+        versionCode = 15
+        versionName = "0.9"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    // Assinatura ESTÁVEL (necessária para o auto-update: o Android só aceita a atualização se o
+    // APK novo tiver a mesma chave do instalado). Lida de keystore.properties (local, fora do git)
+    // ou de variáveis de ambiente (CI: segredos do GitHub). Sem nada disto, cai na chave de debug
+    // como antes -- mas aí cada máquina/CI assina com uma chave diferente.
+    val keystoreProps = java.util.Properties().apply {
+        val f = rootProject.file("keystore.properties")
+        if (f.exists()) f.inputStream().use { load(it) }
+    }
+    fun signingValue(prop: String, env: String): String? =
+        keystoreProps.getProperty(prop)?.takeIf { it.isNotBlank() } ?: System.getenv(env)?.takeIf { it.isNotBlank() }
+    val releaseStoreFile = signingValue("storeFile", "ODINHUB_KEYSTORE")?.let { rootProject.file(it) }?.takeIf { it.exists() }
+
+    signingConfigs {
+        if (releaseStoreFile != null) {
+            create("release") {
+                storeFile = releaseStoreFile
+                storePassword = signingValue("storePassword", "ODINHUB_KEYSTORE_PASSWORD")
+                keyAlias = signingValue("keyAlias", "ODINHUB_KEY_ALIAS")
+                keyPassword = signingValue("keyPassword", "ODINHUB_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
+        debug {
+            // A mesma chave também no debug: um APK compilado em casa atualiza-se pela app (e
+            // vice-versa) sem "assinatura diferente".
+            if (releaseStoreFile != null) signingConfig = signingConfigs.getByName("release")
+        }
         release {
             initWith(buildTypes.getByName("debug"))
+            if (releaseStoreFile != null) signingConfig = signingConfigs.getByName("release")
             isDebuggable = false
             isMinifyEnabled = true
             isShrinkResources = true

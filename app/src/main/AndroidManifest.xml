@@ -12,6 +12,10 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!-- Auto-update: consultar as releases do GitHub e descarregar o APK novo. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Recuo do auto-update quando o PServer não pode instalar: entrega o APK ao instalador do sistema. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <!--
         AUDITORIA DE SUPERFÍCIE EXPOSTA (componentes com android:exported="true")
@@ -41,6 +45,16 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.OdinHub"
         android:dataExtractionRules="@xml/data_extraction_rules">
+        <!-- Partilha o APK descarregado pelo auto-update com o instalador do Android. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.updates"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/update_paths" />
+        </provider>
         <activity
             android:name=".main.MainActivity"
             android:exported="true"
@@ -84,6 +98,11 @@
         </service>
 
         <!-- SERVIÇO DA BARRA LATERAL (GAMING OVERLAY) -->
+        <service
+            android:name=".service.PerformanceHudService"
+            android:enabled="true"
+            android:exported="false" />
+
         <service
             android:name=".service.GamingOverlayService"
             android:enabled="true"

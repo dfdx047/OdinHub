@@ -26,7 +26,7 @@ class DatabaseModule {
             AppDatabase::class.java,
             "app",
         )
-            .addMigrations(AppDatabase.MIGRATION_4_5, AppDatabase.MIGRATION_5_6, AppDatabase.MIGRATION_6_7)
+            .addMigrations(AppDatabase.MIGRATION_4_5, AppDatabase.MIGRATION_5_6, AppDatabase.MIGRATION_6_7, AppDatabase.MIGRATION_7_8)
             // Mantido como rede de segurança para saltos de versão sem migração explícita
             // (ex: instalações muito antigas, v1-v3); a v4->v5 agora preserva os dados.
             .fallbackToDestructiveMigration()

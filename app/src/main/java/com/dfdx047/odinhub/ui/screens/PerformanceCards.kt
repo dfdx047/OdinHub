@@ -305,11 +305,13 @@ fun ManualClockCard(
     perfMHz: Float,
     primeMHz: Float,
     gpuMHz: Float,
+    effMHz: Float,
     customProfiles: List<CustomProfile>,
     theme: ConsoleTheme,
     isEn: Boolean,
-    onClocks: (Float, Float, Float) -> Unit,
-    onSavePreset: (String, Float, Float, Float) -> Unit,
+    /** (perf, prime, gpu, eficiência) em MHz. */
+    onClocks: (Float, Float, Float, Float) -> Unit,
+    onSavePreset: (String, Float, Float, Float, Float) -> Unit,
 ) {
     var presetName by remember { mutableStateOf("") }
     val sourceHint = when {
@@ -337,12 +339,25 @@ fun ManualClockCard(
                     for (prof in userClockProfiles) {
                         PerfChip(
                             label = prof.name,
-                            selected = perfMHz == prof.v2 && primeMHz == prof.v3 && gpuMHz == prof.v4,
+                            selected = perfMHz == prof.v2 && primeMHz == prof.v3 && gpuMHz == prof.v4 && (prof.v5 <= 0f || effMHz == prof.v5),
                             enabled = enabled,
                             theme = theme,
-                        ) { onClocks(prof.v2, prof.v3, prof.v4) }
+                        ) { onClocks(prof.v2, prof.v3, prof.v4, if (prof.v5 > 0f) prof.v5 else effMHz) }
                     }
                 }
+            }
+
+            // Cluster de eficiência: só nos SoCs com três clusters (8 Gen 2, 865).
+            if (tables.hasEfficiencyCluster) {
+                Spacer(modifier = Modifier.height(16.dp))
+                ClockChipRow(
+                    title = (if (isEn) "Efficiency Cluster" else "Cluster Eficiência") + soc.effCores.takeIf { it.isNotBlank() }?.let { " ($it)" }.orEmpty(),
+                    currentMHz = if (effMHz > 0f) effMHz else (tables.effMHz.lastOrNull()?.toFloat() ?: 0f),
+                    tableMHz = tables.effMHz,
+                    enabled = enabled,
+                    theme = theme,
+                    isEn = isEn,
+                ) { onClocks(perfMHz, primeMHz, gpuMHz, it.toFloat()) }
             }
 
             Spacer(modifier = Modifier.height(16.dp))
@@ -353,7 +368,7 @@ fun ManualClockCard(
                 enabled = enabled,
                 theme = theme,
                 isEn = isEn,
-            ) { onClocks(it.toFloat(), primeMHz, gpuMHz) }
+            ) { onClocks(it.toFloat(), primeMHz, gpuMHz, effMHz) }
 
             Spacer(modifier = Modifier.height(16.dp))
             ClockChipRow(
@@ -363,7 +378,7 @@ fun ManualClockCard(
                 enabled = enabled,
                 theme = theme,
                 isEn = isEn,
-            ) { onClocks(perfMHz, it.toFloat(), gpuMHz) }
+            ) { onClocks(perfMHz, it.toFloat(), gpuMHz, effMHz) }
 
             Spacer(modifier = Modifier.height(16.dp))
             ClockChipRow(
@@ -373,13 +388,13 @@ fun ManualClockCard(
                 enabled = enabled,
                 theme = theme,
                 isEn = isEn,
-            ) { onClocks(perfMHz, primeMHz, it.toFloat()) }
+            ) { onClocks(perfMHz, primeMHz, it.toFloat(), effMHz) }
 
             Spacer(modifier = Modifier.height(12.dp))
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 OutlinedTextField(value = presetName, onValueChange = { presetName = it }, label = { Text(if (isEn) "Preset Name" else "Nome do Preset Clocks", fontSize = 10.sp) }, modifier = Modifier.weight(1f).height(50.dp), textStyle = TextStyle(fontSize = 12.sp, color = theme.text), enabled = enabled)
                 Button(
-                    onClick = { if (presetName.isNotBlank() && enabled) { onSavePreset(presetName, perfMHz, primeMHz, gpuMHz); presetName = "" } },
+                    onClick = { if (presetName.isNotBlank() && enabled) { onSavePreset(presetName, perfMHz, primeMHz, gpuMHz, effMHz); presetName = "" } },
                     colors = ButtonDefaults.buttonColors(containerColor = theme.primary),
                     modifier = Modifier.height(50.dp),
                     enabled = enabled,

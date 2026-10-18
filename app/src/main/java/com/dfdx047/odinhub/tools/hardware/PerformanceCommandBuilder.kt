@@ -181,12 +181,23 @@ object PerformanceCommandBuilder {
         // A correção documentada do "5W não limita, 10W limita" nunca chegou a ter efeito real no
         // aparelho. Agora quem chama diz qual é o piso apropriado ao modo em uso.
         minRatio: Float = CPU_MIN_RATIO,
+        /**
+         * Ratio do cluster de EFICIÊNCIA (o mais lento) quando há três ou mais clusters. `null` =
+         * segue o [perfRatio] (o comportamento antigo, e o que o AutoTDP usa).
+         */
+        effRatio: Float? = null,
     ): List<HardwareWriteOp> {
         if (policies.isEmpty()) return emptyList()
         val sorted = policies.sortedBy { it.cpuinfoMaxFreqKHz }
+        val hasEff = sorted.size >= 3
         return sorted.mapIndexed { index, node ->
             val isPrime = index == sorted.lastIndex
-            val ratio = (if (isPrime) primeRatio else perfRatio).coerceIn(minRatio, CPU_MAX_RATIO)
+            val isEff = hasEff && index == 0
+            val ratio = when {
+                isPrime -> primeRatio
+                isEff && effRatio != null -> effRatio
+                else -> perfRatio
+            }.coerceIn(minRatio, CPU_MAX_RATIO)
             val rawTargetKHz = (node.cpuinfoMaxFreqKHz * ratio)
                 .toLong()
                 .coerceIn(1L, node.cpuinfoMaxFreqKHz)
@@ -194,7 +205,11 @@ object PerformanceCommandBuilder {
             // a leitura de verificação passa a bater certo em vez de reportar uma falsa falha.
             val targetFreqKHz = snapToSupported(rawTargetKHz, node.availableFreqsKHz)
             buildWriteOp(
-                label = if (isPrime) "cpu-prime-policy" else "cpu-perf-policy-$index",
+                label = when {
+                    isPrime -> "cpu-prime-policy"
+                    isEff -> "cpu-eff-policy"
+                    else -> "cpu-perf-policy-$index"
+                },
                 path = "${node.policyPath}/scaling_max_freq",
                 value = targetFreqKHz.toString(),
             )
@@ -229,5 +244,21 @@ object PerformanceCommandBuilder {
         val perfRatio = (perfClockKHz.toFloat() / maxPerf.toFloat()).coerceIn(MANUAL_MIN_RATIO, CPU_MAX_RATIO)
         val primeRatio = (primeClockKHz.toFloat() / maxPrime.toFloat()).coerceIn(MANUAL_MIN_RATIO, CPU_MAX_RATIO)
         return perfRatio to primeRatio
+    }
+
+    /**
+     * Ratio do cluster de eficiência (a política mais lenta) para um clock absoluto, ou `null`
+     * quando o SoC não tem esse cluster (menos de três políticas) ou o valor não foi definido
+     * (<= 0) -- aí o cluster segue o ratio do Perf.
+     */
+    fun effClockToRatio(effClockKHz: Long?, policies: List<CpuPolicyNode>, fallbackEffMaxKHz: Long? = null): Float? {
+        if (effClockKHz == null || effClockKHz <= 0L) return null
+        val sorted = policies.sortedBy { it.cpuinfoMaxFreqKHz }
+        val maxEff = when {
+            sorted.size >= 3 -> sorted.first().cpuinfoMaxFreqKHz
+            sorted.isEmpty() -> fallbackEffMaxKHz ?: return null
+            else -> return null
+        }
+        return (effClockKHz.toFloat() / maxEff.toFloat()).coerceIn(MANUAL_MIN_RATIO, CPU_MAX_RATIO)
     }
 }

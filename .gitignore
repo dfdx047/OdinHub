@@ -9,3 +9,7 @@
 .cxx
 local.properties
 /.kotlin/sessions/
+# Chave de assinatura (nunca no git)
+keystore.properties
+*.jks
+*.keystore
