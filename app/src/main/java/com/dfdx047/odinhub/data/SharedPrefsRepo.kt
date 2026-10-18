@@ -77,6 +77,14 @@ class SharedPrefsRepo @Inject constructor(
     var fanMode: Int get() = prefs.getInt("fan_mode", 0); set(value) = prefs.edit().putInt("fan_mode", value).apply()
 
     // ---- Gestos do botão Home (ver HomeGestureDetector / ButtonActionHandler) ----
+    /**
+     * Valor de fábrica de `prevent_press_home_accidentally` guardado ao ligar os gestos
+     * (-1 = nada guardado). Ver SettingsRepo.applyHomeGestureMode.
+     */
+    var homePreventBackup: Int
+        get() = prefs.getInt("home_prevent_backup", -1)
+        set(value) = prefs.edit().putInt("home_prevent_backup", value).apply()
+
     var homeGestureConfig: com.dfdx047.odinhub.models.HomeGestureConfig
         get() {
             val d = com.dfdx047.odinhub.models.HomeGestureConfig()
@@ -113,7 +121,7 @@ class SharedPrefsRepo @Inject constructor(
     fun setMacroNativeBackup(button: String, keyCode: Int) { prefs.edit().putInt("macro_${button}_native_backup", keyCode).commit() }
 
     var activeLimitMode: String get() = prefs.getString("active_limit_mode", "TDP") ?: "TDP"; set(value) = prefs.edit().putString("active_limit_mode", value).apply()
-    /** Slider de TDP. Por omissão o "Triple A" do aparelho atual (15 W no Odin 3, 11 W num Odin 2...). */
+    /** Slider de TDP. Por omissão o "Triple A" do aparelho atual (15 W no Odin 3, 10 W num Odin 2...). */
     var tdpValue: Float get() = prefs.getFloat("tdp_value", TdpProfiles.envelope.tripleA); set(value) = prefs.edit().putFloat("tdp_value", value).apply()
 
     /**
@@ -231,9 +239,9 @@ class SharedPrefsRepo @Inject constructor(
     /** Versão reativa de [hudConfig]: o serviço do HUD redesenha-se ao mexer nas definições. */
     val hudConfigFlow: kotlinx.coroutines.flow.StateFlow<com.dfdx047.odinhub.models.HudConfig> get() = _hudConfigFlow
 
-    /** Posição arrastada do HUD (px a partir do canto escolhido); -1 = posição do canto. */
-    var hudOffsetX: Int get() = prefs.getInt("hud_offset_x", -1); set(value) = prefs.edit().putInt("hud_offset_x", value).apply()
-    var hudOffsetY: Int get() = prefs.getInt("hud_offset_y", -1); set(value) = prefs.edit().putInt("hud_offset_y", value).apply()
+    /** Posição arrastada do HUD (px a partir do canto escolhido); Int.MIN_VALUE = posição do canto. */
+    var hudOffsetX: Int get() = prefs.getInt("hud_offset_x2", Int.MIN_VALUE); set(value) = prefs.edit().putInt("hud_offset_x2", value).apply()
+    var hudOffsetY: Int get() = prefs.getInt("hud_offset_y2", Int.MIN_VALUE); set(value) = prefs.edit().putInt("hud_offset_y2", value).apply()
 
     // ---- Auto-update ----
     var lastUpdateCheck: Long get() = prefs.getLong("last_update_check", 0L); set(value) = prefs.edit().putLong("last_update_check", value).apply()

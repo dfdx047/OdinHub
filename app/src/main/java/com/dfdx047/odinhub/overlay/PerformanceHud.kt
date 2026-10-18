@@ -85,8 +85,8 @@ class PerformanceHud(
             if (existing != null) {
                 // Mudou só o canto/disposição: recalcula a posição sem recriar a janela.
                 if (shownConfig?.position != config.position) {
-                    prefs.hudOffsetX = -1
-                    prefs.hudOffsetY = -1
+                    prefs.hudOffsetX = Int.MIN_VALUE
+                    prefs.hudOffsetY = Int.MIN_VALUE
                 }
                 shownConfig = config
                 params?.let { lp ->
@@ -161,8 +161,9 @@ class PerformanceHud(
             HudPosition.BOTTOM_LEFT -> Gravity.BOTTOM or Gravity.START
             HudPosition.BOTTOM_RIGHT -> Gravity.BOTTOM or Gravity.END
         }
-        lp.x = prefs.hudOffsetX.takeIf { it >= 0 } ?: if (position == HudPosition.TOP_CENTER) 0 else margin
-        lp.y = prefs.hudOffsetY.takeIf { it >= 0 } ?: margin
+        // Int.MIN_VALUE = sem posição arrastada (no centro o x pode ser negativo, por isso não -1).
+        lp.x = prefs.hudOffsetX.takeIf { it != Int.MIN_VALUE } ?: if (position == HudPosition.TOP_CENTER) 0 else margin
+        lp.y = prefs.hudOffsetY.takeIf { it != Int.MIN_VALUE } ?: margin
     }
 
     /** Arrastar: com gravidade END/BOTTOM os eixos crescem para dentro do ecrã, daí o sinal. */
@@ -235,10 +236,11 @@ private fun buildItems(cfg: HudConfig, s: HudSnapshot, isEn: Boolean, normal: Co
     val out = mutableListOf<HudItemData>()
     fun v(text: String, color: Color = normal) = text to color
 
-    if (cfg.has(HudMetric.FPS) || cfg.has(HudMetric.FRAMETIME)) {
+    if (cfg.has(HudMetric.FPS) || cfg.has(HudMetric.FRAMETIME) || cfg.has(HudMetric.FPS_LOW)) {
         val values = mutableListOf<Pair<String, Color>>()
         if (cfg.has(HudMetric.FPS)) values += v(s.fps?.roundToInt()?.toString() ?: "--")
         if (cfg.has(HudMetric.FRAMETIME)) values += v(s.frametimeMs?.let { "%.1f ms".format(Locale.US, it) } ?: "-- ms")
+        if (cfg.has(HudMetric.FPS_LOW)) values += v("1%: " + (s.fpsLow?.roundToInt()?.toString() ?: "--"))
         out += HudItemData("FPS", values)
     }
     if (cfg.has(HudMetric.CPU_USAGE) || cfg.has(HudMetric.CPU_TEMP) || cfg.has(HudMetric.CPU_CLUSTERS)) {

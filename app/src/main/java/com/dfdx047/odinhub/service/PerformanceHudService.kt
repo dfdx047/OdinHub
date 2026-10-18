@@ -80,6 +80,14 @@ class PerformanceHudService : Service() {
          * liga-o.
          */
         fun toggle(context: Context, prefs: SharedPrefsRepo) {
+            if (!android.provider.Settings.canDrawOverlays(context)) {
+                Toast.makeText(
+                    context,
+                    if (prefs.isEnglish) "Allow \"Display over other apps\" for Odin Hub to use the HUD" else "Permita \"Sobreposição a outros apps\" ao Odin Hub para usar o HUD",
+                    Toast.LENGTH_LONG,
+                ).show()
+                return
+            }
             val config = prefs.hudConfig
             if (!config.enabled) {
                 hiddenFlow.value = false

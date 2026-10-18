@@ -102,6 +102,29 @@ class SettingsRepo @Inject constructor(
         get() = executor.getBooleanSystemSetting(KEY_PREVENT_PRESS_HOME, true)
         set(value) = executor.setBooleanSystemSetting(KEY_PREVENT_PRESS_HOME, value)
 
+    /**
+     * O firmware AYN tem a opção "evitar Home acidental" (`prevent_press_home_accidentally`, ligada
+     * de fábrica): com ela, o PhoneWindowManager exige DOIS toques para ir ao Início e engole o
+     * primeiro antes de o evento chegar ao filtro de teclas da acessibilidade. Resultado: o toque
+     * simples nunca disparava, o duplo saía como simples e o triplo nunca era contado -- era o
+     * bug "os gestos do Home não funcionam". Com os gestos ligados desligamos essa proteção (a
+     * nossa janela de multi-toque faz o mesmo papel) e guardamos o valor original para o repor.
+     *
+     * Bloqueante (root): chamar fora da thread principal.
+     */
+    fun applyHomeGestureMode(enabled: Boolean, prefs: com.dfdx047.odinhub.data.SharedPrefsRepo) {
+        if (enabled) {
+            if (prefs.homePreventBackup == -1) prefs.homePreventBackup = if (preventPressHome) 1 else 0
+            if (preventPressHome) preventPressHome = false
+        } else {
+            val backup = prefs.homePreventBackup
+            if (backup != -1) {
+                preventPressHome = backup == 1
+                prefs.homePreventBackup = -1
+            }
+        }
+    }
+
     var vibrationEnabled: Boolean
         get() = executor.getBooleanSystemSetting(KEY_VIBRATE_ON, false)
         set(value) = executor.setBooleanSystemSetting(KEY_VIBRATE_ON, value)

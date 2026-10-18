@@ -14,7 +14,7 @@ class DeviceProfilesTest {
 
     @After
     fun resetEnvelope() {
-        TdpProfiles.envelope = PowerEnvelope(11f, 12.5f, 15f, 25f)
+        TdpProfiles.envelope = DeviceProfiles.POWER_SM8750
     }
 
     @Test

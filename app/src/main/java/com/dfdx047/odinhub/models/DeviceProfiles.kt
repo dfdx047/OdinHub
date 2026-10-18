@@ -197,20 +197,25 @@ object SocTables {
 /**
  * Catálogo dos aparelhos suportados e a deteção.
  *
- * ENVELOPES DE POTÊNCIA: os do Odin 3 (11 / 12.5 / 15 W, máx. 25 W) vêm de testes reais. Os
- * restantes são ESTIMATIVAS a partir do consumo típico de cada SoC em jogo e do tamanho do
- * chassis -- afinar aqui depois de medir em cada aparelho.
+ * ENVELOPES DE POTÊNCIA (v0.9): consumo do aparelho inteiro na bateria, a partir de medições
+ * publicadas de cada SoC em jogo e do tamanho/arrefecimento do chassis. Degraus bem separados
+ * para que Poupança / Equilibrado / AAA se notem de facto (antes, no Odin 3, 11 vs 12.5 W quase
+ * não se distinguiam). Afinar aqui depois de medir em cada aparelho.
  */
 object DeviceProfiles {
 
     // ---- Envelopes ----
-    private val POWER_SM8750 = PowerEnvelope(11f, 12.5f, 15f, 25f)
-    private val POWER_KALAMA_LARGE = PowerEnvelope(7f, 9f, 11f, 18f) // Odin 2 / Portal / Thor / RP6
-    private val POWER_KALAMA_SMALL = PowerEnvelope(6f, 8f, 10f, 15f) // Odin 2 Mini / RP Nova
-    private val POWER_KONA = PowerEnvelope(5f, 6.5f, 8f, 12f) // RP5 / Thor Lite
-    private val POWER_KONA_SMALL = PowerEnvelope(4.5f, 5.5f, 7f, 10f) // RP Mini
-    private val POWER_D1100 = PowerEnvelope(4.5f, 6f, 7.5f, 10f)
-    private val POWER_D900 = PowerEnvelope(3.5f, 4.5f, 6f, 8f)
+    // Poupança / Equilibrado / AAA / teto do slider. Degraus bem separados, pensados para o que
+    // cada chip realmente faz: Poupança = emulação 2D/PS2 leve com o máximo de bateria;
+    // Equilibrado = Switch/PS2 pesado; AAA = jogos Android pesados / Switch exigente; o teto é o
+    // máximo que o chip + arrefecimento sustentam sem throttling térmico imediato.
+    val POWER_SM8750 = PowerEnvelope(7f, 10f, 15f, 25f) // Odin 3
+    private val POWER_KALAMA_LARGE = PowerEnvelope(5f, 7f, 10f, 13f) // Odin 2 / Portal / Thor
+    private val POWER_KALAMA_SMALL = PowerEnvelope(4.5f, 6.5f, 9f, 12f) // Odin 2 Mini / RP6 / RP Nova
+    private val POWER_KONA = PowerEnvelope(3.5f, 4.5f, 6f, 8f) // RP5 / Thor Lite
+    private val POWER_KONA_SMALL = PowerEnvelope(3f, 4f, 5.5f, 7f) // RP Mini / Mini V2
+    private val POWER_D1100 = PowerEnvelope(3.5f, 4.5f, 6f, 8f) // RP4 Pro
+    private val POWER_D900 = PowerEnvelope(3f, 4f, 5f, 7f) // RP4
 
     // ---- Políticas térmicas ----
     /** Odin 3: o comportamento já testado (todos os trips passivos abaixo de 110 °C). */
@@ -263,7 +268,7 @@ object DeviceProfiles {
     val ODIN2_PORTAL = profile("odin2portal", "AYN Odin 2 Portal", SocFamily.KALAMA, POWER_KALAMA_LARGE, backButtons = true)
     val THOR = profile("thor", "AYN Thor", SocFamily.KALAMA, POWER_KALAMA_LARGE, backButtons = true)
     val THOR_LITE = profile("thorlite", "AYN Thor Lite", SocFamily.KONA, POWER_KONA, backButtons = true)
-    val RP6 = profile("rp6", "Retroid Pocket 6", SocFamily.KALAMA, POWER_KALAMA_LARGE, backButtons = false)
+    val RP6 = profile("rp6", "Retroid Pocket 6", SocFamily.KALAMA, POWER_KALAMA_SMALL, backButtons = false)
     val RP_NOVA = profile("rpnova", "Retroid Pocket Nova", SocFamily.KALAMA, POWER_KALAMA_SMALL, backButtons = false)
     val RP5 = profile("rp5", "Retroid Pocket 5", SocFamily.KONA, POWER_KONA, backButtons = false)
     val RP_MINI = profile("rpmini", "Retroid Pocket Mini", SocFamily.KONA, POWER_KONA_SMALL, backButtons = false)

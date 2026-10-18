@@ -73,7 +73,7 @@ fun UpdateDialog(
                     }
                 }
             }
-            confirm = { DialogButton(if (isEn) "Update now" else "Atualizar agora", theme) { onInstall(r) } }
+            confirm = { DialogButton(if (isEn) "Update now" else "Atualizar agora", theme, onClick = { onInstall(r) }) }
             dismiss = {
                 Column {
                     DialogButton(if (isEn) "Later" else "Depois", theme, onDismiss, secondary = true)
@@ -125,7 +125,7 @@ fun UpdateDialog(
             body = { DialogText(state.message, theme) }
             val failedRelease = state.release
             if (failedRelease != null) {
-                confirm = { DialogButton(if (isEn) "Try again" else "Tentar de novo", theme) { onInstall(failedRelease) } }
+                confirm = { DialogButton(if (isEn) "Try again" else "Tentar de novo", theme, onClick = { onInstall(failedRelease) }) }
                 dismiss = { DialogButton(if (isEn) "Close" else "Fechar", theme, onDismiss, secondary = true) }
             } else {
                 confirm = { DialogButton("OK", theme, onDismiss) }

@@ -23,8 +23,8 @@ data class TdpProfile(
  * pelo editor de regras por app, para que os três concordem sempre nos mesmos watts.
  *
  * Os watts dependem do APARELHO (ver [DeviceProfiles] / [PowerEnvelope]): no Odin 3 (8 Elite)
- * vêm dos testes do próprio utilizador -- Power Save 11 W, Balanced 12.5 W, Triple A 15 W, slider
- * até 25 W; num Odin 2 (8 Gen 2) ou num Retroid Pocket 5 (865) o mesmo "Balanced" é muito menos.
+ * são Power Save 7 W, Balanced 10 W, Triple A 15 W, slider até 25 W; num Odin 2 (8 Gen 2) ou num
+ * Retroid Pocket 5 (865) o mesmo "Balanced" é muito menos (7 W / 4.5 W).
  *
  * Os perfis são INDEPENDENTES do slider: escolher um perfil aplica exatamente os watts dele e
  * marca-o como selecionado; arrastar o slider aplica o valor do slider e passa a seleção para
@@ -45,7 +45,7 @@ object TdpProfiles {
      * vale o do Odin 3, o comportamento histórico da app.
      */
     @Volatile
-    var envelope: PowerEnvelope = PowerEnvelope(11f, 12.5f, 15f, 25f)
+    var envelope: PowerEnvelope = PowerEnvelope(7f, 10f, 15f, 25f)
 
     /** Limites do slider de TDP, em watts, em todos os ecrãs. */
     const val TDP_MIN_WATTS = 1f

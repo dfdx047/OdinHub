@@ -4,6 +4,8 @@ import android.os.Handler
 import android.view.KeyEvent
 import com.dfdx047.odinhub.models.ButtonAction
 import com.dfdx047.odinhub.models.HomeGestureConfig
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 
 /**
  * Deteta toque simples / duplo / triplo / longo no botão Home, dentro do serviço de
@@ -27,6 +29,7 @@ class HomeGestureDetector(
             longFired = true
             tapCount = 0
             handler.removeCallbacks(tapWindowRunnable)
+            report(-1, activeConfig.longPress)
             fire(activeConfig.longPress)
         }
     }
@@ -34,7 +37,9 @@ class HomeGestureDetector(
     private val tapWindowRunnable = Runnable {
         val taps = tapCount
         tapCount = 0
-        fire(activeConfig.actionForTaps(taps))
+        val action = activeConfig.actionForTaps(taps)
+        report(taps, action)
+        fire(action)
     }
 
     /** Devolve `true` se o evento foi consumido (gestos ligados e é o Home). */
@@ -76,11 +81,23 @@ class HomeGestureDetector(
     }
 
     /**
-     * O Home do sistema (KEYCODE_HOME) e o botão "Home/Guia" do comando (KEYCODE_BUTTON_MODE):
-     * conforme o firmware, o botão Home da consola chega como um ou como o outro -- e o detetor
-     * só ouvia o primeiro.
+     * Só o Home do sistema (KEYCODE_HOME = 3), que é o que o botão da consola envia em toda a
+     * família AYN/Retroid. NÃO apanhar KEYCODE_BUTTON_MODE: é o botão "Guia" dos comandos, que os
+     * emuladores usam como tecla de atalho (menu do RetroArch, etc.) -- consumi-lo partia-os.
      */
-    private fun isHomeKey(code: Int): Boolean = code == KeyEvent.KEYCODE_HOME || code == KeyEvent.KEYCODE_BUTTON_MODE
+    private fun isHomeKey(code: Int): Boolean = code == KeyEvent.KEYCODE_HOME
+
+    private fun report(taps: Int, action: ButtonAction) {
+        _lastGesture.value = LastGesture(taps, action, System.currentTimeMillis())
+    }
+
+    /** Último gesto reconhecido ([taps] = -1 para toque longo); mostrado no cartão dos gestos. */
+    data class LastGesture(val taps: Int, val action: ButtonAction, val atMs: Long)
+
+    companion object {
+        private val _lastGesture = MutableStateFlow<LastGesture?>(null)
+        val lastGesture: StateFlow<LastGesture?> = _lastGesture
+    }
 
     fun reset() {
         handler.removeCallbacks(longPressRunnable)

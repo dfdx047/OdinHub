@@ -76,7 +76,7 @@ Change a game in one place and the other reflects it. There is no second source 
 
 ### Performance
 - **Dynamic TDP (AutoTDP)** — a closed loop that measures real-time power draw on the battery and walks CPU/GPU clocks until the device settles at your target wattage. It filters the noisy battery reading, cuts fast when over budget and raises slowly when under (no saw-tooth stutter), and — when the GPU is the bottleneck — takes the cut from the CPU instead (and vice versa). It pauses while charging (the battery can't measure the device then) and with the screen off.
-- **TDP profiles** — Power Save, Balanced and Triple A, sized for **the device it's running on** (11 / 12.5 / 15 W on the Odin 3; less on an 8 Gen 2 or a Snapdragon 865), plus Stock (no limit). Profiles are independent from the free slider.
+- **TDP profiles** — Power Save, Balanced and Triple A, sized for **the device it's running on** (7 / 10 / 15 W on the Odin 3, 5 / 7 / 10 W on the Odin 2, 3.5 / 4.5 / 6 W on the Retroid Pocket 5 — see the table below), plus Stock (no limit). Profiles are independent from the free slider.
 - **Per-cluster clock control** — the real frequencies of each CPU cluster (Efficiency / Perf / Prime on three-cluster chips like the 8 Gen 2 and 865, including the top "boost" OPPs) and the GPU, read live from the kernel's OPP tables, with a static per-SoC table as fallback. Only one of TDP or manual clocks is active at a time.
 - **Thermal limit** — optionally move the first-stage passive trip points of the CPU/GPU thermal zones (85 / 90 / 95 °C or unthrottled), globally or per game. Written through PServerBinder like everything else — no KernelSU/Magisk needed. Emergency trips and **fan trips** are never touched, and Stock restores the factory values (the backup is tied to the current boot, so it can never "restore" a modified value).
 - **Fan control** — Stock, Quiet, Smart and Sport, mapped to the device's real fan modes.
@@ -108,21 +108,22 @@ Change a game in one place and the other reflects it. There is no second source 
 
 Odin Hub detects the device on launch ("AYN Odin 2 detected") and switches the frequency tables, thermal zones, GPU control and TDP profiles to match. Everything else — overlay, per-game rules, macros, gestures — is the same on all of them: AYN and Retroid build on the same ODM firmware (Moorechip) and ship the same `PServerBinder` helper.
 
-| Device | SoC | GPU control | Thermal limit | M1/M2 |
-|---|---|---|---|---|
-| AYN Odin 3 | Snapdragon 8 Elite | Adreno 830 (kgsl) | ✓ | ✓ |
-| AYN Odin 2 / Odin 2 Max / Odin 2 Portal | Snapdragon 8 Gen 2 (QCS8550) | Adreno 740, 680 MHz | ✓ | ✓ |
-| AYN Odin 2 Mini | Snapdragon 8 Gen 2 | Adreno 740 | ✓ | ✓ |
-| AYN Thor | Snapdragon 8 Gen 2 | Adreno 740 | ✓ | ✓ |
-| AYN Thor Lite | Snapdragon 865 | Adreno 650 | ✓ | ✓ |
-| Retroid Pocket 6 / Retroid Pocket Nova | Snapdragon 8 Gen 2 (QCS8550) | Adreno 740 | ✓ | if the firmware exposes them |
-| Retroid Pocket 5 / Mini / Mini V2 | Snapdragon 865 | Adreno 650, 670 MHz | ✓ | if the firmware exposes them |
-| Retroid Pocket 4 Pro | Dimensity 1100 | Mali-G77 (MediaTek GED) | — (MediaTek throttles in userspace) | if the firmware exposes them |
-| Retroid Pocket 4 | Dimensity 900 | Mali-G68 (MediaTek GED) | — | if the firmware exposes them |
+| Device | SoC | GPU control | Thermal limit | M1/M2 | TDP profiles (PS / Bal / AAA / max) |
+|---|---|---|---|---|---|
+| AYN Odin 3 | Snapdragon 8 Elite | Adreno 830 (kgsl) | ✓ | ✓ | 7 / 10 / 15 / 25 W |
+| AYN Odin 2 / Odin 2 Max / Odin 2 Portal | Snapdragon 8 Gen 2 (QCS8550) | Adreno 740, 680 MHz | ✓ | ✓ | 5 / 7 / 10 / 13 W |
+| AYN Odin 2 Mini | Snapdragon 8 Gen 2 | Adreno 740 | ✓ | ✓ | 4.5 / 6.5 / 9 / 12 W |
+| AYN Thor | Snapdragon 8 Gen 2 | Adreno 740 | ✓ | ✓ | 5 / 7 / 10 / 13 W |
+| AYN Thor Lite | Snapdragon 865 | Adreno 650 | ✓ | ✓ | 3.5 / 4.5 / 6 / 8 W |
+| Retroid Pocket 6 / Retroid Pocket Nova | Snapdragon 8 Gen 2 (QCS8550) | Adreno 740 | ✓ | if the firmware exposes them | 4.5 / 6.5 / 9 / 12 W |
+| Retroid Pocket 5 | Snapdragon 865 | Adreno 650, 670 MHz | ✓ | if the firmware exposes them | 3.5 / 4.5 / 6 / 8 W |
+| Retroid Pocket Mini / Mini V2 | Snapdragon 865 | Adreno 650 | ✓ | if the firmware exposes them | 3 / 4 / 5.5 / 7 W |
+| Retroid Pocket 4 Pro | Dimensity 1100 | Mali-G77 (MediaTek GED) | — (MediaTek throttles in userspace) | if the firmware exposes them | 3.5 / 4.5 / 6 / 8 W |
+| Retroid Pocket 4 | Dimensity 900 | Mali-G68 (MediaTek GED) | — | if the firmware exposes them | 3 / 4 / 5 / 7 W |
 
 Notes:
 
-- The Odin 3 profile is the tested one. The watt figures of the TDP profiles on the other devices are **starting estimates** from each SoC's typical gaming power and chassis size — tune them to taste with the slider.
+- TDP figures are whole-device battery draw, sized from published per-SoC gaming measurements and each chassis' cooling. The steps are deliberately far apart so the profiles actually feel different — tune to taste with the slider.
 - On the 8 Gen 2, the kernel thermal zones carry passive trips at 50–85 °C that drive the **fan**, not throttling; Odin Hub excludes them (by their cooling device and by a per-SoC minimum temperature) so a thermal limit never delays the fan.
 - On the Thor and the Retroid Pocket 6 the firmware raises each cluster's minimum frequency according to its own performance mode. When a cap goes below that floor, Odin Hub lowers the floor too, so the cap actually holds.
 - Some firmwares (the Odin 2 Mini is the known case) don't return command output through PServerBinder. Odin Hub detects that, switches to output-less mode and reads values straight from sysfs instead.

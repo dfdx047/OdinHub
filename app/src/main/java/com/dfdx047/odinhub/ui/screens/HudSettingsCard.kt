@@ -44,7 +44,8 @@ fun HudSettingsCard(
     config: HudConfig,
     theme: ConsoleTheme,
     isEn: Boolean,
-    hasOverlayPermission: Boolean,
+    /** Lida no momento do toque (não na composição): ao voltar das definições já está atualizada. */
+    hasOverlayPermission: () -> Boolean,
     onRequestPermission: () -> Unit,
     onChange: (HudConfig) -> Unit,
     onShowAgain: () -> Unit,
@@ -64,7 +65,7 @@ fun HudSettingsCard(
                     )
                 }
                 ConsoleToggle(checked = config.enabled, theme = theme, onCheckedChange = {
-                    if (it && !hasOverlayPermission) onRequestPermission() else onChange(config.copy(enabled = it))
+                    if (it && !hasOverlayPermission()) onRequestPermission() else onChange(config.copy(enabled = it))
                 })
             }
 

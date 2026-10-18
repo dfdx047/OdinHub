@@ -59,7 +59,9 @@ data class HomeGestureConfig(
     companion object {
         const val DEFAULT_LONG_PRESS_MS = 2000L
         /** Janela entre toques para contarem como duplo/triplo. */
-        const val MULTI_TAP_WINDOW_MS = 300L
+        // 300 ms era curto para o Home "mole" das consolas: o duplo toque saía muitas vezes como
+        // dois toques simples.
+        const val MULTI_TAP_WINDOW_MS = 400L
         val LONG_PRESS_OPTIONS_MS = listOf(1000L, 1500L, 2000L, 3000L)
     }
 }

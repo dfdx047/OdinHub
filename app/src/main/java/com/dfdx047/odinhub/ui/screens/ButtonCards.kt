@@ -22,6 +22,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
@@ -72,6 +73,29 @@ fun HomeGesturesCard(
                     )
                 }
                 ConsoleToggle(checked = config.enabled, theme = theme, onCheckedChange = { onChange(config.copy(enabled = it)) })
+            }
+            if (config.enabled) {
+                // Diagnóstico: sem isto, "não funciona" podia ser o serviço desligado, o botão a
+                // não chegar, ou só a ação escolhida a não fazer nada fora de um jogo.
+                val a11yOn by com.dfdx047.odinhub.service.ForegroundAppWatcherService.connectedFlow.collectAsState()
+                val last by com.dfdx047.odinhub.tools.HomeGestureDetector.lastGesture.collectAsState()
+                Spacer(Modifier.height(6.dp))
+                val status = when {
+                    !a11yOn -> if (isEn) "⚠ Accessibility service is off — gestures can't work. Enable Odin Hub in Settings › Accessibility."
+                               else "⚠ Serviço de acessibilidade desligado — os gestos não funcionam. Ative o Odin Hub em Definições › Acessibilidade."
+                    last == null -> if (isEn) "Press Home to test — the last gesture shows here." else "Carregue no Home para testar — o último gesto aparece aqui."
+                    else -> {
+                        val g = last!!
+                        val kind = when (g.taps) {
+                            -1 -> if (isEn) "Long press" else "Toque longo"
+                            1 -> if (isEn) "Single tap" else "Toque simples"
+                            2 -> if (isEn) "Double tap" else "Toque duplo"
+                            else -> if (isEn) "Triple tap" else "Toque triplo"
+                        }
+                        (if (isEn) "Last: " else "Último: ") + kind + " → " + g.action.label(isEn)
+                    }
+                }
+                Text(status, color = if (!a11yOn) theme.primary else theme.text.copy(alpha = 0.7f), fontFamily = theme.fontFamily, fontSize = 11.sp)
             }
             Spacer(Modifier.height(8.dp))
             GestureRow(if (isEn) "Single tap" else "Toque simples", config.singleTap, config.enabled, theme, isEn) { onChange(config.copy(singleTap = it)) }

@@ -16,9 +16,9 @@ class PerformanceModelsTest {
     // ---------------------------------------------------------------- TdpProfiles
 
     @Test
-    fun `perfis fixos tem os watts testados no 8 Elite`() {
-        assertEquals(11f, TdpProfiles.POWER_SAVE.watts)
-        assertEquals(12.5f, TdpProfiles.BALANCED.watts)
+    fun `perfis fixos do 8 Elite`() {
+        assertEquals(7f, TdpProfiles.POWER_SAVE.watts)
+        assertEquals(10f, TdpProfiles.BALANCED.watts)
         assertEquals(15f, TdpProfiles.TRIPLE_A.watts)
         assertNull(TdpProfiles.STOCK.watts)
     }
@@ -31,8 +31,8 @@ class PerformanceModelsTest {
 
     @Test
     fun `perfil fixo ignora o valor do slider`() {
-        assertEquals(11f, TdpProfiles.resolveWatts(TdpProfiles.ID_POWER_SAVE, 3f))
-        assertEquals(12.5f, TdpProfiles.resolveWatts(TdpProfiles.ID_BALANCED, 20f))
+        assertEquals(7f, TdpProfiles.resolveWatts(TdpProfiles.ID_POWER_SAVE, 3f))
+        assertEquals(10f, TdpProfiles.resolveWatts(TdpProfiles.ID_BALANCED, 20f))
         assertNull(TdpProfiles.resolveWatts(TdpProfiles.ID_STOCK, 20f))
     }
 
@@ -45,7 +45,7 @@ class PerformanceModelsTest {
 
     @Test
     fun `idForWatts reconhece perfis e a sentinela de Stock`() {
-        assertEquals(TdpProfiles.ID_BALANCED, TdpProfiles.idForWatts(12.5f))
+        assertEquals(TdpProfiles.ID_BALANCED, TdpProfiles.idForWatts(10f))
         assertEquals(TdpProfiles.ID_CUSTOM, TdpProfiles.idForWatts(9f))
         assertEquals(TdpProfiles.ID_STOCK, TdpProfiles.idForWatts(TdpProfiles.STOCK_SENTINEL_WATTS))
     }

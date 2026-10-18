@@ -97,12 +97,13 @@
                 android:value="true" />
         </service>
 
-        <!-- SERVIÇO DA BARRA LATERAL (GAMING OVERLAY) -->
+        <!-- HUD DE DESEMPENHO -->
         <service
             android:name=".service.PerformanceHudService"
             android:enabled="true"
             android:exported="false" />
 
+        <!-- SERVIÇO DA BARRA LATERAL (GAMING OVERLAY) -->
         <service
             android:name=".service.GamingOverlayService"
             android:enabled="true"

@@ -72,6 +72,13 @@ class QuickAccessOverlay(
                 setExpanded(false)
             } else if (host?.composeView?.visibility == View.VISIBLE) {
                 setExpanded(true)
+            } else {
+                // A barra só existe dentro de jogos/apps: no ecrã inicial o gesto parecia avariado.
+                android.widget.Toast.makeText(
+                    context,
+                    if (prefs.isEnglish) "The side overlay opens inside games and apps" else "A barra lateral abre dentro de jogos e apps",
+                    android.widget.Toast.LENGTH_SHORT,
+                ).show()
             }
         }
     }

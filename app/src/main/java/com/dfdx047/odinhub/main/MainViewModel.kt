@@ -495,8 +495,12 @@ class MainViewModel @Inject constructor(
     // atualizado de imediato para a UI continuar a responder na hora.
     // ---- Gestos do botão Home ----
     fun updateHomeGestures(config: HomeGestureConfig) {
+        val wasEnabled = prefs.homeGestureConfig.enabled
         prefs.homeGestureConfig = config
         _uiState.update { it.copy(homeGestures = config) }
+        if (wasEnabled != config.enabled) {
+            viewModelScope.launch(Dispatchers.IO) { runCatching { settings.applyHomeGestureMode(config.enabled, prefs) } }
+        }
     }
 
     // ---- Macros M1/M2 ----

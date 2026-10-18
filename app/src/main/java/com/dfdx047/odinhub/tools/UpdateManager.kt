@@ -71,13 +71,17 @@ class UpdateManager @Inject constructor(
     suspend fun autoCheck() {
         val now = System.currentTimeMillis()
         if (now - prefs.lastUpdateCheck < AUTO_CHECK_INTERVAL_MS) return
-        prefs.lastUpdateCheck = now
         val found = check(manual = false)
+        // Só conta como "verificado" se a consulta correu bem (uma falha de rede não bloqueia 6 h).
+        if (_state.value !is UpdateState.Failed) prefs.lastUpdateCheck = now
         if (found != null && found.tag == prefs.skippedUpdateTag) _state.value = UpdateState.Idle
     }
 
     /** Pergunta ao GitHub pela última release. Devolve-a se for mais nova do que a instalada. */
     suspend fun check(manual: Boolean = true): AppRelease? = withContext(Dispatchers.IO) {
+        // A meio de um download/instalação não se mexe no estado (o diálogo piscava).
+        val busy = _state.value
+        if (busy is UpdateState.Downloading || busy is UpdateState.Installing) return@withContext null
         if (manual) _state.value = UpdateState.Checking
         val result = runCatching { fetchLatest() }
         val release = result.getOrNull()
@@ -165,7 +169,7 @@ class UpdateManager @Inject constructor(
             }
             val code = conn.responseCode
             if (code in 300..399 && hops < 5) {
-                url = URL(url, conn.getHeaderField("Location"))
+                url = URL(url, conn.getHeaderField("Location") ?: error("redirect sem Location"))
                 conn.disconnect()
                 hops++
                 continue

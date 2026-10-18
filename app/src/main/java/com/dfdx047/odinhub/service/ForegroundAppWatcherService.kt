@@ -34,6 +34,7 @@ class ForegroundAppWatcherService : AccessibilityService() {
     @Inject lateinit var thermalManager: ThermalManager
     @Inject lateinit var displayManager: DisplayManager
     @Inject lateinit var buttonActions: ButtonActionHandler
+    @Inject lateinit var settingsRepo: com.dfdx047.odinhub.tools.SettingsRepo
 
     // Fonte única de verdade das regras por jogo (ver AppOverrideRepository). Substitui as
     // leituras diretas de SharedPrefs (`prefs.getPerApp*`) que existiam aqui antes: aquelas
@@ -82,6 +83,12 @@ class ForegroundAppWatcherService : AccessibilityService() {
         // do tracker fica em repouso.
         foregroundTracker.setAccessibilityConnected(true)
         buttonActions.attach(this)
+        connectedFlow.value = true
+        // O firmware pode repor o "evitar Home acidental" depois de um reinício/OTA: com os gestos
+        // ligados, voltamos a desligá-lo (ver SettingsRepo.applyHomeGestureMode).
+        if (prefs.homeGestureConfig.enabled) {
+            scope.launch { runCatching { settingsRepo.applyHomeGestureMode(true, prefs) } }
+        }
 
         // Nota: não usar `rootInActiveWindow` aqui. Este serviço está declarado com
         // `canRetrieveWindowContent="false"` (ver accessibility_service_config.xml), portanto essa
@@ -253,16 +260,20 @@ class ForegroundAppWatcherService : AccessibilityService() {
         // Devolve a deteção à sondagem de reserva: se este serviço for desligado (pelo utilizador
         // ou pelo sistema), o overlay não pode simplesmente deixar de funcionar.
         foregroundTracker.setAccessibilityConnected(false)
+        connectedFlow.value = false
         homeGestures.reset()
         buttonActions.detach()
         scope.cancel()
     }
 
-    private companion object {
+    companion object {
+        /** `true` enquanto o serviço de acessibilidade está ligado (cartão dos gestos do Home). */
+        val connectedFlow = kotlinx.coroutines.flow.MutableStateFlow(false)
+
         /** Ver o comentário em `onAccessibilityEvent` sobre por que existe esta espera. */
-        const val APPLY_DEBOUNCE_MS = 120L
+        private const val APPLY_DEBOUNCE_MS = 120L
 
         /** Janela da semeadura inicial (ver onServiceConnected). */
-        const val SEED_LOOKBACK_MS = 6 * 60 * 60 * 1000L
+        private const val SEED_LOOKBACK_MS = 6 * 60 * 60 * 1000L
     }
 }

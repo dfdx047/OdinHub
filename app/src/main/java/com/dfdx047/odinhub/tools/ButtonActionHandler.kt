@@ -75,7 +75,19 @@ class ButtonActionHandler @Inject constructor(
             ButtonAction.QUICK_SETTINGS -> service?.performGlobalAction(AccessibilityService.GLOBAL_ACTION_QUICK_SETTINGS)
             ButtonAction.POWER_MENU -> service?.performGlobalAction(AccessibilityService.GLOBAL_ACTION_POWER_DIALOG)
             ButtonAction.LOCK_SCREEN -> service?.performGlobalAction(AccessibilityService.GLOBAL_ACTION_LOCK_SCREEN)
-            ButtonAction.TOGGLE_OVERLAY -> GamingOverlayService.toggleOverlayFlow.tryEmit(Unit)
+            ButtonAction.TOGGLE_OVERLAY -> {
+                // Sem o serviço do overlay a correr ninguém recolhe o pedido e o gesto "não fazia
+                // nada" -- explicamos porquê em vez de falhar em silêncio.
+                if (GamingOverlayService.toggleOverlayFlow.subscriptionCount.value == 0) {
+                    android.widget.Toast.makeText(
+                        context,
+                        if (isEn) "Side overlay is off — turn it on in Odin Hub" else "A barra lateral está desligada — ligue-a no Odin Hub",
+                        android.widget.Toast.LENGTH_SHORT,
+                    ).show()
+                } else {
+                    GamingOverlayService.toggleOverlayFlow.tryEmit(Unit)
+                }
+            }
             ButtonAction.TOGGLE_HUD -> com.dfdx047.odinhub.service.PerformanceHudService.toggle(context, prefs)
             ButtonAction.SCREEN_RECORD -> toggleScreenRecording()
             ButtonAction.CLOSE_APP -> closeForegroundGame(service)

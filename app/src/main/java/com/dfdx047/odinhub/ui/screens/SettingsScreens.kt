@@ -876,7 +876,7 @@ fun SystemPanel(
             config = hudConfig,
             theme = theme,
             isEn = isEn,
-            hasOverlayPermission = Settings.canDrawOverlays(context),
+            hasOverlayPermission = { Settings.canDrawOverlays(context) },
             onRequestPermission = {
                 context.startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${context.packageName}")))
                 Toast.makeText(context, if (isEn) "Grant the overlay permission" else "Conceda a permissão de sobreposição", Toast.LENGTH_LONG).show()

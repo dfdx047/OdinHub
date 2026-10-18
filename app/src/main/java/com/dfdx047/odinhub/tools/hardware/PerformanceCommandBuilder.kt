@@ -139,6 +139,37 @@ fun isWriteApplied(requested: String, before: String?, after: String?): Boolean 
  */
 object PerformanceCommandBuilder {
 
+    /**
+     * Tabela completa de frequências de uma política (kHz, crescente). Os kernels Qualcomm não
+     * põem tudo no mesmo sítio: os OPPs "boost" (os de topo) só aparecem em
+     * `scaling_boost_frequencies`, e alguns kernels nem os listam aí -- só em
+     * `stats/time_in_state` (1.ª coluna). Junta-se tudo, mais o mínimo e o máximo do hardware,
+     * e descarta-se o que estiver fora de [minKHz]..[maxKHz]. Lista com 1 só valor = vazia
+     * (não dá para escolher nada).
+     */
+    fun mergeFrequencyTables(
+        available: List<Long>,
+        boost: List<Long>,
+        timeInState: List<Long>,
+        maxKHz: Long,
+        minKHz: Long? = null,
+    ): List<Long> {
+        val lo = minKHz?.takeIf { it in 1..maxKHz } ?: 1L
+        return (available + boost + timeInState + listOfNotNull(minKHz, maxKHz))
+            .filter { it in lo..maxKHz }
+            .distinct()
+            .sorted()
+            .takeIf { it.size > 1 }
+            .orEmpty()
+    }
+
+    /** 1.ª coluna de `cpufreq/policyN/stats/time_in_state` ("<kHz> <ticks>" por linha). */
+    fun parseTimeInState(raw: String?): List<Long> =
+        raw.orEmpty().lineSequence()
+            .mapNotNull { it.trim().split(Regex("\\s+")).firstOrNull()?.toLongOrNull() }
+            .filter { it > 0 }
+            .toList()
+
     const val CPU_MIN_RATIO = 0.30f
     const val CPU_MAX_RATIO = 1.0f
 

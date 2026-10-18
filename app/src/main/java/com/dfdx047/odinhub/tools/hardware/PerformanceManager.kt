@@ -205,6 +205,7 @@ class PerformanceManager @Inject constructor(
 
     private fun loadHardware() {
         policies = scanCpuPolicies()
+        ensureCpuBoostEnabled()
         gpu = createGpuControl()
         ppmAvailable = device.soc.isMediaTek && File(PPM_HARD_LIMIT).exists()
 
@@ -228,6 +229,19 @@ class PerformanceManager @Inject constructor(
         Log.i(TAG, "${device.name}: ${policies.size} políticas, GPU=${gpu::class.simpleName} (${gpu.availableHz.size} OPPs), PPM=$ppmAvailable, tabelas=${_clockTables.value.source}")
     }
 
+    /**
+     * Nos kernels com `cpufreq/boost`, os OPPs boost só são aceites em `scaling_max_freq` com o
+     * interruptor a 1. Se estiver a 0, escolher a frequência de topo no chip era ignorado em
+     * silêncio (o kernel ficava no último OPP normal) -- o "faltam frequências" do 8 Elite.
+     */
+    private fun ensureCpuBoostEnabled() {
+        val node = "$CPUFREQ_ROOT/boost"
+        if (readLocal(node) == "0") {
+            executor.executeAsRoot("echo 1 > $node")
+            Log.i(TAG, "cpufreq/boost estava a 0 -- ligado para os OPPs de topo")
+        }
+    }
+
     /** Varre as políticas de cpufreq do kernel (nunca assume `policy0`/`policy6` fixos). */
     private fun scanCpuPolicies(): List<CpuPolicyNode> = runCatching {
         File(CPUFREQ_ROOT).listFiles()
@@ -242,11 +256,14 @@ class PerformanceManager @Inject constructor(
                     // Os OPPs "boost" (os mais altos, em muitos kernels Qualcomm) NÃO aparecem em
                     // scaling_available_frequencies, só em scaling_boost_frequencies -- sem os
                     // juntar faltavam as frequências de topo nos chips (ex: no 8 Elite).
-                    availableFreqsKHz = (
-                        parseFreqList(readLocal("${dir.absolutePath}/scaling_available_frequencies")) +
-                            parseFreqList(readLocal("${dir.absolutePath}/scaling_boost_frequencies")) +
-                            listOf(max)
-                        ).filter { it in 1..max }.distinct().sorted().takeIf { it.size > 1 }.orEmpty(),
+                    // e alguns kernels só os mostram em stats/time_in_state. Junta-se tudo.
+                    availableFreqsKHz = PerformanceCommandBuilder.mergeFrequencyTables(
+                        available = parseFreqList(readLocal("${dir.absolutePath}/scaling_available_frequencies")),
+                        boost = parseFreqList(readLocal("${dir.absolutePath}/scaling_boost_frequencies")),
+                        timeInState = PerformanceCommandBuilder.parseTimeInState(readLocal("${dir.absolutePath}/stats/time_in_state")),
+                        maxKHz = max,
+                        minKHz = readLocal("${dir.absolutePath}/cpuinfo_min_freq")?.toLongOrNull(),
+                    ),
                 )
             }
             ?.sortedBy { it.policyPath }
