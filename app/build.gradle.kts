@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.com.android.application)
     alias(libs.plugins.org.jetbrains.kotlin.android)
@@ -6,6 +8,19 @@ plugins {
     alias(libs.plugins.com.google.devtools.ksp)
     alias(libs.plugins.androidx.room)
 }
+
+// Assinatura ESTÁVEL (necessária para o auto-update: o Android só aceita a atualização se o
+// APK novo tiver a mesma chave do instalado). Lida de keystore.properties (local, fora do git)
+// ou de variáveis de ambiente (CI: segredos do GitHub). Sem nada disto, cai na chave de debug
+// como antes -- mas aí cada máquina/CI assina com uma chave diferente.
+// Fica FORA do bloco android {}: lá dentro `java` é a extensão do Gradle e `java.util` não resolve.
+val keystoreProps = Properties().apply {
+    val f = rootProject.file("keystore.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+fun signingValue(prop: String, env: String): String? =
+    keystoreProps.getProperty(prop)?.takeIf { it.isNotBlank() } ?: System.getenv(env)?.takeIf { it.isNotBlank() }
+val releaseStoreFile = signingValue("storeFile", "ODINHUB_KEYSTORE")?.let { rootProject.file(it) }?.takeIf { it.exists() }
 
 android {
     namespace = "com.dfdx047.odinhub"
@@ -19,18 +34,6 @@ android {
         versionName = "0.9"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
-
-    // Assinatura ESTÁVEL (necessária para o auto-update: o Android só aceita a atualização se o
-    // APK novo tiver a mesma chave do instalado). Lida de keystore.properties (local, fora do git)
-    // ou de variáveis de ambiente (CI: segredos do GitHub). Sem nada disto, cai na chave de debug
-    // como antes -- mas aí cada máquina/CI assina com uma chave diferente.
-    val keystoreProps = java.util.Properties().apply {
-        val f = rootProject.file("keystore.properties")
-        if (f.exists()) f.inputStream().use { load(it) }
-    }
-    fun signingValue(prop: String, env: String): String? =
-        keystoreProps.getProperty(prop)?.takeIf { it.isNotBlank() } ?: System.getenv(env)?.takeIf { it.isNotBlank() }
-    val releaseStoreFile = signingValue("storeFile", "ODINHUB_KEYSTORE")?.let { rootProject.file(it) }?.takeIf { it.exists() }
 
     signingConfigs {
         if (releaseStoreFile != null) {
