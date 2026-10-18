@@ -40,21 +40,35 @@ object ClockTableCuration {
 
     const val DEFAULT_TARGET_COUNT = 10
 
+    /** Quantos degraus de topo entram SEMPRE na seleção (é aí que se afina o desempenho). */
+    const val TOP_STEPS_KEPT = 3
+
+    /**
+     * Subconjunto da tabela para os chips por omissão: os [TOP_STEPS_KEPT] degraus de topo todos
+     * (antes, no Prime do 8 Elite, o 4204 MHz desaparecia e saltava-se de 4089 para 4320) e o
+     * resto espalhado de forma uniforme até ao mínimo.
+     */
     fun curate(all: List<Int>, targetCount: Int = DEFAULT_TARGET_COUNT): List<Int> {
         val sorted = all.distinct().sorted()
         if (targetCount <= 0) return emptyList()
         if (sorted.size <= targetCount) return sorted
         if (targetCount == 1) return listOf(sorted.last())
 
-        val lastIndex = sorted.lastIndex
+        val topCount = TOP_STEPS_KEPT.coerceAtMost(targetCount - 1)
+        val top = sorted.takeLast(topCount)
+        val rest = sorted.dropLast(topCount)
+        val restCount = targetCount - topCount
         val picked = LinkedHashSet<Int>()
-        for (i in 0 until targetCount) {
-            val index = Math.round(i.toDouble() * lastIndex / (targetCount - 1)).toInt()
-            picked.add(sorted[index])
+        if (restCount == 1) {
+            picked.add(rest.first())
+        } else {
+            val lastIndex = rest.lastIndex
+            for (i in 0 until restCount) {
+                picked.add(rest[Math.round(i.toDouble() * lastIndex / (restCount - 1)).toInt()])
+            }
         }
-        // Garantia explícita dos extremos, mesmo que o arredondamento os tivesse perdido.
-        picked.add(sorted.first())
-        picked.add(sorted.last())
+        picked.add(rest.first())
+        picked.addAll(top)
         return picked.sorted()
     }
 

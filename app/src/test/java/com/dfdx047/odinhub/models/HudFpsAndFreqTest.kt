@@ -101,4 +101,12 @@ class HudFpsAndFreqTest {
         assertEquals(1, cfg.copy(doubleTap = ButtonAction.NONE, tripleTap = ButtonAction.NONE).maxTaps)
         assertTrue(HomeGestureConfig.MULTI_TAP_WINDOW_MS >= 400L)
     }
+
+    @Test
+    fun `uso da CPU pelo idle dos nucleos`() {
+        // 8 núcleos, 1 s: 6 s de idle somado = 25% de uso.
+        assertEquals(25, HudMath.cpuUsageFromIdle(6_000_000L, 1_000_000L, 8))
+        assertEquals(0, HudMath.cpuUsageFromIdle(9_000_000L, 1_000_000L, 8)) // relógios desalinhados
+        assertNull(HudMath.cpuUsageFromIdle(1L, 0L, 8))
+    }
 }

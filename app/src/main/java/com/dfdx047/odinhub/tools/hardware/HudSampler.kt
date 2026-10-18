@@ -72,6 +72,8 @@ class HudSampler @Inject constructor(
     private var lastFlips: Long? = null
     private var lastFlipsAt = 0L
     private var lastCpu: Pair<Long, Long>? = null
+    /** Recurso sem root: idle total dos núcleos (µs) e o instante da leitura (µs). */
+    private var lastIdle: Pair<Long, Long>? = null
     private val history = ArrayDeque<Float>()
     private val fpsTracker = FpsTracker()
     private var layerPackage: String? = null
@@ -109,6 +111,7 @@ class HudSampler @Inject constructor(
     private fun resetState() {
         lastFlips = null
         lastCpu = null
+        lastIdle = null
         history.clear()
         fpsTracker.clear()
         layerPackage = null
@@ -123,23 +126,25 @@ class HudSampler @Inject constructor(
         var fpsLow: Float? = null
         var cpuUsage: Int? = null
 
-        if (cfg.needsRoot && executor.outputCaptureWorks) {
+        val wantCpu = cfg.has(HudMetric.CPU_USAGE)
+        if ((cfg.needsRoot || wantCpu) && executor.outputCaptureWorks) {
             val wantFps = cfg.metrics.any { it.isFps }
-            val wantCpu = cfg.has(HudMetric.CPU_USAGE)
             val pkg = foregroundTracker.currentPackage.value.takeIf { it.isNotBlank() && it != ForegroundAppTracker.GLOBAL && it.matches(PACKAGE) }
             if (wantFps && pkg != layerPackage) resolveLayer(pkg)
             val layer = layerCandidates.getOrNull(layerIndex)
 
-            // Uma única transação root por segundo: frames da camada do jogo (ou o contador
-            // antigo, se não houver camada) + /proc/stat.
+            // Uma única transação root por segundo: /proc/stat + frames da camada do jogo (ou o
+            // contador antigo, se não houver camada). O /proc/stat vai PRIMEIRO: a saída do
+            // dumpsys --latency é longa (até 128 linhas) e, se o binder a cortar, o uso da CPU
+            // perdia-se com ela -- era o "CPU --%" com a GPU a funcionar.
             val fpsCmd = when {
                 !wantFps -> null
                 layer != null -> "dumpsys SurfaceFlinger --latency ${shellQuote(layer)}"
                 else -> "service call SurfaceFlinger 1013"
             }
-            val cmd = listOfNotNull(fpsCmd, if (wantCpu) "echo $STAT_MARK; head -n 1 /proc/stat" else null).joinToString("; ")
+            val cmd = listOfNotNull(if (wantCpu) "head -n 1 /proc/stat; echo $STAT_MARK" else null, fpsCmd).joinToString("; ")
             val out = executor.executeAsRoot(cmd).getOrNull().orEmpty()
-            val fpsPart = out.substringBefore(STAT_MARK)
+            val fpsPart = if (wantCpu) out.substringAfter(STAT_MARK, "") else out
 
             if (wantFps && layer != null) {
                 val before = fpsTracker.newest
@@ -173,12 +178,15 @@ class HudSampler @Inject constructor(
                 frametime = fps?.takeIf { it >= 1f }?.let { 1000f / it }
             }
             if (wantCpu) {
-                val stat = HudMath.parseCpuStat(out.substringAfter(STAT_MARK, "").lines().firstOrNull { it.startsWith("cpu") })
+                val stat = HudMath.parseCpuStat(out.substringBefore(STAT_MARK).lines().firstOrNull { it.trim().startsWith("cpu ") })
                 val previous = lastCpu
                 if (stat != null && previous != null) cpuUsage = HudMath.cpuUsage(previous, stat)
                 lastCpu = stat
             }
         }
+
+        // Sem root (ou /proc/stat bloqueado pelo SELinux): uso pelo tempo em idle dos núcleos.
+        if (wantCpu && cpuUsage == null) cpuUsage = cpuUsageFromIdle()
 
         if (frametime != null) {
             history.addLast(frametime)
@@ -250,6 +258,24 @@ class HudSampler @Inject constructor(
             ?.map { "${it.absolutePath}/temp" }
             ?.filter { readText(it) != null } // só as legíveis sem root
             .orEmpty()
+
+    private fun cpuUsageFromIdle(): Int? {
+        val nowUs = System.nanoTime() / 1000
+        var idle = 0L
+        var online = 0
+        for (cpu in 0 until coreCount) {
+            val base = "/sys/devices/system/cpu/cpu$cpu"
+            if (cpu > 0 && readText("$base/online") == "0") continue
+            val states = File("$base/cpuidle").listFiles { f -> f.name.startsWith("state") } ?: continue
+            if (states.isEmpty()) continue
+            idle += states.sumOf { readLong("${it.path}/time") ?: 0L }
+            online++
+        }
+        if (online == 0) return null
+        val previous = lastIdle
+        lastIdle = idle to nowUs
+        return if (previous == null) null else HudMath.cpuUsageFromIdle(idle - previous.first, nowUs - previous.second, online)
+    }
 
     private fun readText(path: String): String? = runCatching { File(path).readText().trim() }.getOrNull()?.takeIf { it.isNotEmpty() }
     private fun readLong(path: String): Long? = readText(path)?.toLongOrNull()

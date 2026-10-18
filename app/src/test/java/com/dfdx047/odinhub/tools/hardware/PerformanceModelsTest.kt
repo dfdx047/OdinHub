@@ -69,6 +69,13 @@ class PerformanceModelsTest {
     }
 
     @Test
+    fun `curate mantem os degraus de topo todos (4204 no Prime do 8 Elite)`() {
+        val curated = ClockTableCuration.curate(ClusterClockPresets.SM8750.primeMHz)
+        assertEquals(listOf(4089, 4204, 4320), curated.takeLast(3))
+        assertEquals(ClockTableCuration.DEFAULT_TARGET_COUNT, curated.size)
+    }
+
+    @Test
     fun `curate devolve tabelas pequenas inteiras`() {
         assertEquals(listOf(100, 200, 300), ClockTableCuration.curate(listOf(300, 100, 200)))
     }

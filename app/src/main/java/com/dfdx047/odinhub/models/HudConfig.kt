@@ -24,7 +24,8 @@ enum class HudMetric(val id: String, val labelEn: String, val labelPt: String) {
     fun label(isEn: Boolean): String = if (isEn) labelEn else labelPt
 
     /** Precisa de root (PServer) a cada segundo: FPS/frame time (SurfaceFlinger) e uso da CPU (/proc/stat). */
-    val needsRoot: Boolean get() = isFps || this == CPU_USAGE
+    // CPU_USAGE usa /proc/stat por root quando dá, mas tem um recurso sem root (cpuidle).
+    val needsRoot: Boolean get() = isFps
 
     /** Métricas que vêm dos tempos de apresentação dos frames (SurfaceFlinger). */
     val isFps: Boolean get() = this == FPS || this == FRAMETIME || this == FPS_GRAPH || this == FPS_LOW
@@ -191,6 +192,17 @@ object HudMath {
         if (total <= 0) return null
         val busy = current.first - previous.first
         return ((busy * 100) / total).toInt().coerceIn(0, 100)
+    }
+
+    /**
+     * Uso da CPU sem root, pelo tempo em idle de cada núcleo
+     * (`/sys/devices/system/cpu/cpuN/cpuidle/stateK/time`, em µs, legível por apps).
+     * [idleDeltaUs] = idle somado de todos os núcleos ligados no intervalo; [wallUs] = intervalo.
+     */
+    fun cpuUsageFromIdle(idleDeltaUs: Long, wallUs: Long, onlineCores: Int): Int? {
+        if (wallUs <= 0 || onlineCores <= 0 || idleDeltaUs < 0) return null
+        val capacity = wallUs * onlineCores
+        return (100 - (idleDeltaUs * 100 / capacity)).toInt().coerceIn(0, 100)
     }
 
     /** /proc/meminfo -> (usada, total) em MB, com MemAvailable. */

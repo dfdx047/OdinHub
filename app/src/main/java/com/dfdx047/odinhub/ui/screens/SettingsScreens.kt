@@ -497,7 +497,18 @@ fun VideoBootScreen(theme: ConsoleTheme, onVideoEnded: () -> Unit) {
 @Composable
 fun ConsoleMenuBar(selectedTab: Int, theme: ConsoleTheme, isEn: Boolean, isLandscape: Boolean, onTabSelected: (Int) -> Unit) {
     val modifier = if (isLandscape) { Modifier.padding(horizontal = 8.dp).fillMaxHeight(0.85f).width(85.dp) } else { Modifier.padding(horizontal = 24.dp, vertical = 8.dp).fillMaxWidth().height(85.dp) }
-    Box(modifier = modifier.clip(RoundedCornerShape(32.dp)).background(theme.surface.copy(alpha = 0.5f)).border(1.dp, theme.text.copy(alpha = 0.15f), RoundedCornerShape(32.dp)), contentAlignment = Alignment.Center) {
+    val railShape = RoundedCornerShape(32.dp)
+    // Modo vidro: a barra das abas usa o mesmo material dos cartões (superfície translúcida,
+    // reflexo no topo e contorno de luz em degradê) -- antes ficava de fora e destoava.
+    val railStyle = if (theme.glassMode) {
+        Modifier.clip(railShape)
+            .background(theme.glass(true))
+            .background(Brush.verticalGradient(listOf(theme.glassHighlight, Color.Transparent)))
+            .border(1.dp, Brush.verticalGradient(listOf(theme.glassEdgeTop, theme.glassEdgeBottom)), railShape)
+    } else {
+        Modifier.clip(railShape).background(theme.surface.copy(alpha = 0.5f)).border(1.dp, theme.text.copy(alpha = 0.15f), railShape)
+    }
+    Box(modifier = modifier.then(railStyle), contentAlignment = Alignment.Center) {
         if (isLandscape) {
             Column(modifier = Modifier.fillMaxHeight(), verticalArrangement = Arrangement.SpaceEvenly, horizontalAlignment = Alignment.CenterHorizontally) {
                 ConsoleTabItem(0, "PERF", R.drawable.ic_sliders, selectedTab, theme, isLandscape, onTabSelected)
@@ -520,7 +531,9 @@ fun ConsoleMenuBar(selectedTab: Int, theme: ConsoleTheme, isEn: Boolean, isLands
 fun ConsoleTabItem(index: Int, title: String, iconResId: Int, selectedTab: Int, theme: ConsoleTheme, isLandscape: Boolean, onClick: (Int) -> Unit) {
     val isSelected = selectedTab == index
     val color by animateColorAsState(if (isSelected) theme.primary else theme.text.copy(alpha = 0.4f), label = "tabColor")
-    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { onClick(index) }.padding(if (isLandscape) 4.dp else 8.dp)) {
+    // No modo vidro a aba ativa ganha uma "pílula" translúcida, como nas barras do Liquid Glass.
+    val pill by animateColorAsState(if (isSelected && theme.glassMode) theme.primary.copy(alpha = 0.16f) else Color.Transparent, label = "tabPill")
+    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clip(RoundedCornerShape(20.dp)).background(pill).clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { onClick(index) }.padding(if (isLandscape) 8.dp else 10.dp)) {
         Icon(painterResource(iconResId), contentDescription = title, tint = color, modifier = Modifier.size(if (isLandscape) 24.dp else 28.dp))
         Spacer(modifier = Modifier.height(4.dp))
         Text(title, color = color, fontSize = if (isLandscape) 10.sp else 12.sp, fontFamily = theme.fontFamily, fontWeight = if (isSelected) FontWeight.Black else FontWeight.SemiBold, letterSpacing = 1.sp)
