@@ -10,6 +10,10 @@
 </p>
 
 <p align="center">
+  <b>English</b> · <a href="./README.pt-BR.md">Português (Brasil)</a>
+</p>
+
+<p align="center">
   <a href="https://github.com/dfdx047/OdinHub/releases"><img src="https://img.shields.io/github/v/release/dfdx047/OdinHub?include_prereleases&label=download&style=for-the-badge" alt="Latest release"></a>
   <img src="https://img.shields.io/badge/devices-Odin%202%20%7C%20Odin%203%20%7C%20Thor%20%7C%20Retroid-7c6cf0?style=for-the-badge" alt="AYN Odin / Thor / Retroid Pocket">
   <img src="https://img.shields.io/badge/root-not%20required-2ea44f?style=for-the-badge" alt="No root required">
@@ -95,11 +99,12 @@ Change a game in one place and the other reflects it. There is no second source 
 - A small MangoHud-style overlay over **any app**: FPS, frame time (with a graph), CPU load and temperature, per-cluster or per-core clocks, GPU load / temperature / clock, RAM, power draw, battery % and temperature, TDP target and the time.
 - **Everything is optional** — switch each metric on or off. Horizontal bar or vertical panel, five anchor positions, drag to move, three text sizes, adjustable background.
 - Follows the app's theme, including Glass mode. **Double-tap to hide**; bring it back from the side overlay, the Home gesture "Show/hide performance HUD", or Settings.
-- Cheap: everything is read straight from sysfs except FPS/frame time and CPU load, which share a single PServerBinder call per second — and sampling stops while the HUD is hidden or the screen is off.
+- Cheap: everything is read straight from sysfs (CPU load comes from the cores' idle time); only FPS / frame time needs one PServerBinder call per second. Sampling stops while the HUD is hidden or the screen is off.
+- The window grows as you add metrics, and the horizontal bar wraps to a second line instead of running off the screen.
 
 ### Interface
 - **Glass appearance** — a Liquid Glass–style mode that works on top of every theme: translucent surfaces with a light edge; the side overlay also blurs the game behind it when the system allows.
-- **Auto-update** — Odin Hub checks GitHub for a newer release, shows a pop-up with the release notes, downloads the APK and installs it in place through PServerBinder (or hands it to the Android installer).
+- **Auto-update** — Odin Hub checks GitHub for a newer release when you open it and every few hours in the background (with a notification), shows a pop-up with the release notes, downloads the APK and installs it in place through PServerBinder (or hands it to the Android installer).
 - Seven console-inspired themes (Odin OS, Cyberpunk, SNES, NES, PlayStation, Xbox, Steam OS) plus a Light theme, Material You dynamic colors, and an AMOLED black mode.
 - D-pad navigable with haptic feedback and focus glow.
 - Animated boot sequence, custom wallpapers, and an integrated BGM/SFX mixer.
@@ -152,26 +157,23 @@ Foreground-app detection runs through an accessibility service, with a `UsageSta
 2. Install it on your device.
 3. Launch it and grant the two permissions it asks for.
 
-## Signing (needed for auto-update)
+After that, new versions show up inside the app (pop-up and notification) and install over the old one. If you installed v0.10 or older, uninstall it once before installing v0.11: those builds were signed with a different key.
 
-Android only installs an update signed with **the same key** as the installed app. Debug keys differ from machine to machine (and on every CI run), so set up one release key once:
+## Releasing
+
+Releases are built and published **from the developer's machine**, not by GitHub Actions (CI only runs the tests and a debug build). This keeps every release signed with the same key, which Android requires to install an update over the previous version. By default that key is the machine's Android debug key (`~/.android/debug.keystore`), so there is nothing to set up. **Back that file up**: without it, the next release can't update over the installed one.
+
+1. Raise `versionCode` and `versionName` in `app/build.gradle.kts`.
+2. Add a `## vX.Y` section at the top of [`CHANGELOG.md`](./CHANGELOG.md), in English and Portuguese.
+3. Commit, then run:
 
 ```bash
-keytool -genkeypair -v -keystore odinhub.jks -alias odinhub -keyalg RSA -keysize 4096 -validity 36500
+./scripts/release.sh
 ```
 
-Locally, create `keystore.properties` in the project root (it's git-ignored):
+The script runs the tests, builds the release APK, creates and pushes the `vX.Y` tag, and publishes the GitHub release with the APK (`OdinHub-vX.Y.apk`) and that version's changelog section as the release notes. It needs the [GitHub CLI](https://cli.github.com/) signed in (`gh auth login`).
 
-```properties
-storeFile=odinhub.jks
-storePassword=YOUR_PASSWORD
-keyAlias=odinhub
-keyPassword=YOUR_PASSWORD
-```
-
-For GitHub Actions, add these repository secrets: `ODINHUB_KEYSTORE_BASE64` (output of `base64 -w0 odinhub.jks`), `ODINHUB_KEYSTORE_PASSWORD`, `ODINHUB_KEY_ALIAS`, `ODINHUB_KEY_PASSWORD`. Both debug and release builds then use that key. Without it, normal builds still work with the debug key, but **tag (release) builds fail on purpose**: a release signed with a throwaway key could never update over the previous one.
-
-Releases must be **published** (not left as drafts) for the in-app updater to see them.
+Optional: to use a dedicated key instead of the debug key, put a `keystore.properties` file (git-ignored) in the project root with `storeFile`, `storePassword`, `keyAlias` and `keyPassword`.
 
 ## Building
 

@@ -9,18 +9,17 @@ plugins {
     alias(libs.plugins.androidx.room)
 }
 
-// Assinatura ESTÁVEL (necessária para o auto-update: o Android só aceita a atualização se o
-// APK novo tiver a mesma chave do instalado). Lida de keystore.properties (local, fora do git)
-// ou de variáveis de ambiente (CI: segredos do GitHub). Sem nada disto, cai na chave de debug
-// como antes -- mas aí cada máquina/CI assina com uma chave diferente.
-// Fica FORA do bloco android {}: lá dentro `java` é a extensão do Gradle e `java.util` não resolve.
+// Assinatura: o Android só instala uma atualização assinada com a MESMA chave da versão instalada.
+// Por omissão os APKs (debug E release) são assinados com a chave de debug DESTE computador
+// (~/.android/debug.keystore, criada pelo Android Studio) -- como as releases são compiladas aqui
+// (scripts/release.sh) e não no GitHub, a chave é sempre a mesma e o auto-update funciona.
+// Opcional: um keystore.properties na raiz (fora do git) usa uma chave própria em vez dessa.
+// (Isto fica fora do bloco `android`: lá dentro `java` é a extensão do Gradle e `java.util` não resolve.)
 val keystoreProps = Properties().apply {
     val f = rootProject.file("keystore.properties")
     if (f.exists()) f.inputStream().use { load(it) }
 }
-fun signingValue(prop: String, env: String): String? =
-    keystoreProps.getProperty(prop)?.takeIf { it.isNotBlank() } ?: System.getenv(env)?.takeIf { it.isNotBlank() }
-val releaseStoreFile = signingValue("storeFile", "ODINHUB_KEYSTORE")?.let { rootProject.file(it) }?.takeIf { it.exists() }
+val releaseStoreFile = keystoreProps.getProperty("storeFile")?.takeIf { it.isNotBlank() }?.let { rootProject.file(it) }?.takeIf { it.exists() }
 
 android {
     namespace = "com.dfdx047.odinhub"
@@ -39,20 +38,21 @@ android {
         if (releaseStoreFile != null) {
             create("release") {
                 storeFile = releaseStoreFile
-                storePassword = signingValue("storePassword", "ODINHUB_KEYSTORE_PASSWORD")
-                keyAlias = signingValue("keyAlias", "ODINHUB_KEY_ALIAS")
-                keyPassword = signingValue("keyPassword", "ODINHUB_KEY_PASSWORD")
+                storePassword = keystoreProps.getProperty("storePassword")
+                keyAlias = keystoreProps.getProperty("keyAlias")
+                keyPassword = keystoreProps.getProperty("keyPassword")
             }
         }
     }
 
     buildTypes {
         debug {
-            // A mesma chave também no debug: um APK compilado em casa atualiza-se pela app (e
-            // vice-versa) sem "assinatura diferente".
+            // Com chave própria, também no debug (sem ela, o debug já usa a chave de debug).
             if (releaseStoreFile != null) signingConfig = signingConfigs.getByName("release")
         }
         release {
+            // initWith copia a assinatura do debug: sem chave própria, a release sai assinada com
+            // a chave de debug deste computador (estável entre versões).
             initWith(buildTypes.getByName("debug"))
             if (releaseStoreFile != null) signingConfig = signingConfigs.getByName("release")
             isDebuggable = false

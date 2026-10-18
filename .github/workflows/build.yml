@@ -1,24 +1,18 @@
 name: Build Odin Hub
 
+# Só valida o código (testes + APK de debug) em cada push / PR. As RELEASES já não são feitas
+# aqui: são compiladas e publicadas no computador do autor com scripts/release.sh, para saírem
+# sempre assinadas com a mesma chave (cada runner do GitHub tem uma chave de debug diferente,
+# e um APK assim nunca instala por cima da versão anterior).
 on:
   push:
     branches: [ "main" ]
-    tags: [ "v*" ]
   pull_request:
     branches: [ "main" ]
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    env:
-      ODINHUB_KEYSTORE_PASSWORD: ${{ secrets.ODINHUB_KEYSTORE_PASSWORD }}
-      ODINHUB_KEY_ALIAS: ${{ secrets.ODINHUB_KEY_ALIAS }}
-      ODINHUB_KEY_PASSWORD: ${{ secrets.ODINHUB_KEY_PASSWORD }}
-    # Usado pelo job "release" abaixo para saber se ja correu o build com sucesso e
-    # onde ficou o APK, sem repetir a compilacao.
-    outputs:
-      apk-path: app/build/outputs/apk/release/app-release.apk
-
     steps:
       - name: Checkout do codigo
         uses: actions/checkout@v4
@@ -33,27 +27,6 @@ jobs:
       - name: Dar permissao de execucao ao Gradle
         run: chmod +x gradlew
 
-      # Chave de assinatura estavel (auto-update). So existe se os segredos estiverem
-      # configurados no GitHub (Settings > Secrets and variables > Actions):
-      #   ODINHUB_KEYSTORE_BASE64, ODINHUB_KEYSTORE_PASSWORD, ODINHUB_KEY_ALIAS, ODINHUB_KEY_PASSWORD
-      # Sem eles, o build continua a funcionar com a chave de debug do runner.
-      - name: Preparar a chave de assinatura
-        env:
-          KEYSTORE_B64: ${{ secrets.ODINHUB_KEYSTORE_BASE64 }}
-        run: |
-          if [ -n "$KEYSTORE_B64" ]; then
-            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/odinhub.jks"
-            echo "ODINHUB_KEYSTORE=$RUNNER_TEMP/odinhub.jks" >> "$GITHUB_ENV"
-          elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            # Uma release assinada com a chave de debug do runner (diferente a cada build) nunca
-            # instala por cima da anterior -- melhor falhar aqui do que publicar um APK assim.
-            echo "::error::Faltam os segredos de assinatura (ODINHUB_KEYSTORE_BASE64...). A release não seria atualizável."
-            exit 1
-          fi
-
-      # Antes, a CI só rodava assembleDebug -- ou seja, um build que compila mas quebra em
-      # runtime (como os bugs corrigidos nesta auditoria) passava verde. testDebugUnitTest roda
-      # antes do build para falhar o PR cedo, em vez de só descobrir o problema num dispositivo.
       - name: Rodar os testes unitarios (Debug)
         run: ./gradlew testDebugUnitTest
 
@@ -67,37 +40,8 @@ jobs:
       - name: Compilar o APK (Debug)
         run: ./gradlew assembleDebug
 
-      # So compila o Release quando o build foi disparado por uma tag "v*" (ver job "release"
-      # abaixo) -- em push normal para main / PR basta o Debug para validar o codigo.
-      - name: Compilar o APK (Release)
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: ./gradlew assembleRelease
-
-      - name: Fazer Upload do APK
+      - name: Fazer Upload do APK de teste
         uses: actions/upload-artifact@v4
         with:
-          name: OdinHub
-          path: app/build/outputs/apk/**/*.apk
-
-  release:
-    # So corre quando o build acima passa E o gatilho foi uma tag de versao (ex.: v0.6).
-    # Cria sempre um Release em DRAFT -- nunca publica sozinho, fica so pronto a rever e a
-    # publicar manualmente no GitHub quando quiseres lancar de facto.
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Baixar o APK compilado no job anterior
-        uses: actions/download-artifact@v4
-        with:
-          name: OdinHub
-          path: apk
-
-      - name: Criar Release em rascunho (draft)
-        uses: softprops/action-gh-release@v2
-        with:
-          draft: true
-          generate_release_notes: true
-          files: apk/release/app-release.apk
+          name: OdinHub-debug
+          path: app/build/outputs/apk/debug/*.apk
