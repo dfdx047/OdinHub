@@ -894,6 +894,7 @@ fun SystemPanel(
 
         // HUD de desempenho (FPS, temperaturas, frequências...), ao lado do overlay lateral.
         val hudConfig by viewModel.hudConfig.collectAsState()
+        val sensorReport by viewModel.sensorReport.collectAsState()
         HudSettingsCard(
             config = hudConfig,
             theme = theme,
@@ -905,6 +906,9 @@ fun SystemPanel(
             },
             onChange = { viewModel.updateHudConfig(it) },
             onShowAgain = { viewModel.showHudAgain(); playClick() },
+            sensorReport = sensorReport,
+            onRunDiagnostics = { viewModel.runSensorDiagnostics(); playClick() },
+            onCloseDiagnostics = { viewModel.closeSensorDiagnostics() },
         )
 
         ConsoleSectionHeader(if (isEn) "Audio" else "Áudio", theme)

@@ -59,7 +59,19 @@ class MainViewModel @Inject constructor(
     private val losslessManager: LosslessManager,
     private val soundManager: SoundManager,
     private val updateManager: com.dfdx047.odinhub.tools.UpdateManager,
+    private val hudSampler: com.dfdx047.odinhub.tools.hardware.HudSampler,
 ) : ViewModel() {
+
+    /** Relatório do "Diagnóstico dos sensores" (null = diálogo fechado; "" = a gerar). */
+    private val _sensorReport = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+    val sensorReport: StateFlow<String?> = _sensorReport
+    fun runSensorDiagnostics() {
+        _sensorReport.value = ""
+        viewModelScope.launch(Dispatchers.IO) {
+            _sensorReport.value = runCatching { hudSampler.thermalReport() }.getOrElse { "Erro: ${it.message}" }
+        }
+    }
+    fun closeSensorDiagnostics() { _sensorReport.value = null }
 
     /** Estado do auto-update (o diálogo no SettingsScreen observa isto). */
     val updateState: StateFlow<com.dfdx047.odinhub.tools.UpdateState> get() = updateManager.state

@@ -11,6 +11,9 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Slider
@@ -49,7 +52,12 @@ fun HudSettingsCard(
     onRequestPermission: () -> Unit,
     onChange: (HudConfig) -> Unit,
     onShowAgain: () -> Unit,
+    /** Diagnóstico dos sensores: null = fechado, "" = a gerar, texto = relatório. */
+    sensorReport: String? = null,
+    onRunDiagnostics: () -> Unit = {},
+    onCloseDiagnostics: () -> Unit = {},
 ) {
+    if (sensorReport != null) SensorReportDialog(sensorReport, theme, isEn, onCloseDiagnostics)
     ConsoleCard(
         if (isEn) "Performance HUD" else "HUD de Desempenho",
         if (isEn) "FPS, temperatures, clocks and more over any app" else "FPS, temperaturas, frequências e mais sobre qualquer app",
@@ -75,6 +83,11 @@ fun HudSettingsCard(
                     if (isEn) "Show again (if hidden with a double tap)" else "Mostrar de novo (se foi escondido com dois toques)",
                     color = theme.primary, fontFamily = theme.fontFamily, fontSize = 11.sp, fontWeight = FontWeight.Bold,
                     modifier = Modifier.clickable { onShowAgain() }.padding(vertical = 4.dp),
+                )
+                Text(
+                    if (isEn) "Sensor diagnostics (temperature missing?)" else "Diagnóstico dos sensores (falta alguma temperatura?)",
+                    color = theme.primary, fontFamily = theme.fontFamily, fontSize = 11.sp, fontWeight = FontWeight.Bold,
+                    modifier = Modifier.clickable { onRunDiagnostics() }.padding(vertical = 4.dp),
                 )
             }
 
@@ -162,4 +175,61 @@ private fun HudChip(label: String, selected: Boolean, theme: ConsoleTheme, modif
     ) {
         Text(label, color = if (selected) theme.onPrimary else theme.text, fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1, fontFamily = theme.fontFamily)
     }
+}
+
+/**
+ * Lista todas as zonas térmicas do aparelho (tipo, leitura direta e por root) e quais o HUD usa,
+ * com botões para copiar ou partilhar -- para descobrir num aparelho novo porque falta uma
+ * temperatura sem precisar de ADB.
+ */
+@Composable
+private fun SensorReportDialog(report: String, theme: ConsoleTheme, isEn: Boolean, onClose: () -> Unit) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onClose,
+        containerColor = theme.surface,
+        title = { Text(if (isEn) "Sensor diagnostics" else "Diagnóstico dos sensores", color = theme.text, fontFamily = theme.fontFamily) },
+        text = {
+            if (report.isEmpty()) {
+                Text(if (isEn) "Reading sensors…" else "A ler os sensores…", color = theme.text)
+            } else {
+                androidx.compose.foundation.text.selection.SelectionContainer {
+                    Text(
+                        report,
+                        color = theme.text,
+                        fontSize = 10.sp,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        modifier = Modifier
+                            .heightIn(max = 420.dp)
+                            .verticalScroll(rememberScrollState()),
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                if (report.isNotEmpty()) {
+                    Text(
+                        if (isEn) "COPY" else "COPIAR", color = theme.primary, fontWeight = FontWeight.Bold,
+                        modifier = Modifier.clickable {
+                            val cm = context.getSystemService(android.content.ClipboardManager::class.java)
+                            cm?.setPrimaryClip(android.content.ClipData.newPlainText("Odin Hub sensors", report))
+                            android.widget.Toast.makeText(context, if (isEn) "Copied" else "Copiado", android.widget.Toast.LENGTH_SHORT).show()
+                        }.padding(8.dp),
+                    )
+                    Text(
+                        if (isEn) "SHARE" else "PARTILHAR", color = theme.primary, fontWeight = FontWeight.Bold,
+                        modifier = Modifier.clickable {
+                            val send = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                                type = "text/plain"
+                                putExtra(android.content.Intent.EXTRA_TEXT, report)
+                            }
+                            context.startActivity(android.content.Intent.createChooser(send, null).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+                        }.padding(8.dp),
+                    )
+                }
+                Text(if (isEn) "CLOSE" else "FECHAR", color = theme.text, fontWeight = FontWeight.Bold, modifier = Modifier.clickable { onClose() }.padding(8.dp))
+            }
+        },
+    )
 }

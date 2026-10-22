@@ -1,6 +1,7 @@
 package com.dfdx047.odinhub.tools.hardware
 
 import android.content.Context
+import android.os.Build
 import android.os.PowerManager
 import com.dfdx047.odinhub.models.FpsTracker
 import com.dfdx047.odinhub.models.HudConfig
@@ -57,8 +58,17 @@ class HudSampler @Inject constructor(
     private val powerManager: PowerManager? = context.getSystemService(PowerManager::class.java)
 
     // Descoberto uma vez (os nós não mudam com o aparelho ligado).
-    private val cpuTempNodes: List<String> by lazy { zonesMatching(CPU_ZONE) }
-    private val gpuTempNodes: List<String> by lazy { zonesMatching(GPU_ZONE) }
+    /**
+     * Zonas térmicas, descobertas uma vez. BUG (Thor / Retroid com 8 Gen 2): nalguns firmwares o
+     * SELinux não deixa as apps lerem `thermal_zoneN/temp` (ou o `type`). Antes essas zonas eram
+     * simplesmente descartadas e a temperatura da CPU/GPU ficava "--". Agora o que não se lê
+     * diretamente é lido pelo PServer (root), todas numa só chamada por segundo.
+     */
+    private data class Zone(val name: String, val type: String?, val role: String?, val tempPath: String, val direct: Boolean)
+
+    private val zones: List<Zone> by lazy { discoverZones() }
+    private val cpuZones: List<Zone> by lazy { zones.filter { it.role == "CPU" } }
+    private val gpuZones: List<Zone> by lazy { zones.filter { it.role == "GPU" } }
     private val policyCurNodes: List<String> by lazy {
         File(CPUFREQ).listFiles()?.filter { it.name.startsWith("policy") }
             ?.sortedBy { readLong("${it.absolutePath}/cpuinfo_max_freq") ?: 0L }
@@ -205,11 +215,11 @@ class HudSampler @Inject constructor(
             fpsLow = fpsLow,
             frametimeHistory = history.toList(),
             cpuUsagePercent = cpuUsage,
-            cpuTempC = if (cfg.has(HudMetric.CPU_TEMP)) maxTemp(cpuTempNodes) else null,
+            cpuTempC = if (cfg.has(HudMetric.CPU_TEMP)) maxTemp(cpuZones) else null,
             clusterMHz = if (cfg.has(HudMetric.CPU_CLUSTERS)) policyCurNodes.map { (readLong(it) ?: 0L).toInt() / 1000 } else emptyList(),
             coreMHz = if (cfg.has(HudMetric.CPU_CORES)) (0 until coreCount).map { (readLong("/sys/devices/system/cpu/cpu$it/cpufreq/scaling_cur_freq") ?: 0L).toInt() / 1000 } else emptyList(),
             gpuLoadPercent = if (cfg.has(HudMetric.GPU_LOAD)) gpuLoad() else null,
-            gpuTempC = if (cfg.has(HudMetric.GPU_TEMP)) maxTemp(gpuTempNodes) else null,
+            gpuTempC = if (cfg.has(HudMetric.GPU_TEMP)) maxTemp(gpuZones) else null,
             gpuMHz = if (cfg.has(HudMetric.GPU_FREQ)) gpuMHz() else null,
             ramUsedMB = ram?.first,
             ramTotalMB = ram?.second,
@@ -245,16 +255,71 @@ class HudSampler @Inject constructor(
         }
     }
 
-    private fun maxTemp(nodes: List<String>): Float? =
-        nodes.mapNotNull { HudMath.parseTempC(readText(it)) }.filter { it in 1f..150f }.maxOrNull()
+    private fun maxTemp(list: List<Zone>): Float? {
+        if (list.isEmpty()) return null
+        val values = list.filter { it.direct }.mapNotNull { HudMath.parseTempC(readText(it.tempPath)) }.toMutableList()
+        val viaRoot = list.filterNot { it.direct }.take(MAX_ROOT_ZONES)
+        if (viaRoot.isNotEmpty() && executor.outputCaptureWorks) {
+            val out = executor.executeAsRoot("grep -H . " + viaRoot.joinToString(" ") { it.tempPath }).getOrNull()
+            values += HudMath.parseGrepH(out).values.mapNotNull { HudMath.parseTempC(it) }
+        }
+        return values.filter { it in 1f..150f }.maxOrNull()
+    }
 
-    private fun zonesMatching(pattern: Regex): List<String> =
-        File("/sys/class/thermal").listFiles()
-            ?.filter { it.name.startsWith("thermal_zone") }
-            ?.filter { zone -> readText("${zone.absolutePath}/type")?.let { pattern.containsMatchIn(it) } == true }
-            ?.map { "${it.absolutePath}/temp" }
-            ?.filter { readText(it) != null } // só as legíveis sem root
-            .orEmpty()
+    private fun zoneDirs(): List<String> {
+        val local = File(THERMAL).list()?.filter { it.startsWith("thermal_zone") }
+        val names = if (!local.isNullOrEmpty()) local
+        else executor.executeAsRoot("ls $THERMAL").getOrNull().orEmpty().split(Regex("\\s+")).filter { it.startsWith("thermal_zone") }
+        return names.sortedBy { it.removePrefix("thermal_zone").toIntOrNull() ?: Int.MAX_VALUE }
+    }
+
+    private fun discoverZones(): List<Zone> {
+        val names = zoneDirs()
+        val localTypes = names.associateWith { readText("$THERMAL/$it/type") }
+        // Tipos ilegíveis sem root: pede-os todos de uma vez ao PServer.
+        val missing = names.filter { localTypes[it] == null }
+        val rootTypes = if (missing.isNotEmpty() && executor.outputCaptureWorks) {
+            HudMath.parseGrepH(executor.executeAsRoot("grep -H . " + missing.joinToString(" ") { "$THERMAL/$it/type" }).getOrNull())
+        } else emptyMap()
+        return names.map { name ->
+            val type = localTypes[name] ?: rootTypes["$THERMAL/$name/type"]
+            val tempPath = "$THERMAL/$name/temp"
+            Zone(name, type, HudMath.zoneRole(type), tempPath, direct = readText(tempPath) != null)
+        }
+    }
+
+    /**
+     * Relatório de diagnóstico dos sensores (cartão do HUD -> "Diagnóstico dos sensores"): todas
+     * as zonas com o tipo, a leitura direta e a leitura por root, e quais o HUD usa. Bloqueante.
+     */
+    fun thermalReport(): String {
+        val sb = StringBuilder()
+        sb.appendLine("Odin Hub ${com.dfdx047.odinhub.BuildConfig.VERSION_NAME} — ${Build.MANUFACTURER} ${Build.MODEL} (${Build.DEVICE})")
+        sb.appendLine("SoC: ${Build.SOC_MANUFACTURER} ${Build.SOC_MODEL} · board ${Build.BOARD} · Android ${Build.VERSION.RELEASE}")
+        sb.appendLine("PServer: ${if (executor.pServerAvailable) "ok" else "INDISPONÍVEL"} · captura de saída: ${if (executor.outputCaptureWorks) "ok" else "NÃO"}")
+        val names = zoneDirs()
+        sb.appendLine("Zonas térmicas: ${names.size}")
+        val rootTypes = if (executor.outputCaptureWorks && names.isNotEmpty())
+            HudMath.parseGrepH(executor.executeAsRoot("grep -H . " + names.joinToString(" ") { "$THERMAL/$it/type" }).getOrNull()) else emptyMap()
+        val rootTemps = if (executor.outputCaptureWorks && names.isNotEmpty())
+            HudMath.parseGrepH(executor.executeAsRoot("grep -H . " + names.joinToString(" ") { "$THERMAL/$it/temp" }).getOrNull()) else emptyMap()
+        sb.appendLine()
+        sb.appendLine("zona | tipo | direto | root | uso")
+        for (name in names) {
+            val type = readText("$THERMAL/$name/type") ?: rootTypes["$THERMAL/$name/type"]
+            val directType = readText("$THERMAL/$name/type") != null
+            val direct = readText("$THERMAL/$name/temp")
+            val root = rootTemps["$THERMAL/$name/temp"]
+            val role = HudMath.zoneRole(type) ?: "-"
+            fun fmt(raw: String?) = raw?.let { r -> HudMath.parseTempC(r)?.let { "%.1f°C".format(java.util.Locale.US, it) } ?: "\"$r\"" } ?: "negado"
+            sb.appendLine("$name | ${type ?: "?"}${if (directType) "" else " (tipo só por root)"} | ${fmt(direct)} | ${fmt(root)} | $role")
+        }
+        sb.appendLine()
+        sb.appendLine("HUD usa — CPU: ${cpuZones.joinToString { it.type ?: it.name }.ifEmpty { "nenhuma" }}")
+        sb.appendLine("HUD usa — GPU: ${gpuZones.joinToString { it.type ?: it.name }.ifEmpty { "nenhuma" }}")
+        sb.appendLine("Bateria: ${readText("/sys/class/power_supply/battery/temp") ?: "negado"}")
+        return sb.toString()
+    }
 
     private fun cpuUsageFromIdle(): Int? {
         val nowUs = System.nanoTime() / 1000
@@ -284,7 +349,8 @@ class HudSampler @Inject constructor(
         val PACKAGE = Regex("[A-Za-z0-9_.]+")
 
         /** Zonas de CPU (Qualcomm: cpu-*, cpuss-*; MediaTek: mtktscpu, cpu_big/little, soc_max). */
-        val CPU_ZONE = Regex("^(cpu|cpuss|mtktscpu|cpu_big|cpu_little|soc_max|apc)", RegexOption.IGNORE_CASE)
-        val GPU_ZONE = Regex("^(gpu|gpuss|mtktsgpu|gpu_)", RegexOption.IGNORE_CASE)
+        const val THERMAL = "/sys/class/thermal"
+        /** Limite de zonas lidas por root em cada segundo (o comando não deve crescer sem fim). */
+        const val MAX_ROOT_ZONES = 16
     }
 }

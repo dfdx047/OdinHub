@@ -215,6 +215,33 @@ object HudMath {
     }
 
     /** Temperatura de um nó de sysfs: millicelsius (45000), decicelsius (450) ou celsius (45). */
+    /**
+     * Saída de `grep -H . <ficheiros>` ("caminho:valor" por linha) -> mapa caminho -> valor.
+     * Serve para ler VÁRIOS nós por root numa só chamada sem depender da ordem (um nó ilegível
+     * simplesmente não aparece, em vez de baralhar os restantes como faria um `cat a b c`).
+     */
+    fun parseGrepH(output: String?): Map<String, String> =
+        output.orEmpty().lineSequence()
+            .map { it.trim() }
+            .filter { it.startsWith("/") && it.contains(':') }
+            .associate { it.substringBefore(':') to it.substringAfter(':').trim() }
+
+    /** Papel de uma zona térmica pelo seu `type`: CPU, GPU ou nenhum. */
+    fun zoneRole(type: String?): String? {
+        val t = type?.trim()?.lowercase() ?: return null
+        return when {
+            CPU_ZONE.containsMatchIn(t) -> "CPU"
+            GPU_ZONE.containsMatchIn(t) -> "GPU"
+            else -> null
+        }
+    }
+
+    // 8 Elite: cpu-0-0-0, cpuss-0. 8 Gen 2 / 865: cpu-1-0-0, cpu-0-3-usr, cpuss-1, cpullc. Kernels
+    // antigos: cpu0-silver-usr, cpu4-gold. MediaTek: mtktscpu, cpu_big, cpu_little.
+    private val CPU_ZONE = Regex("^(cpu|cpuss|cpullc|mtktscpu|apc|silver|gold|prime)")
+    // Adreno: gpuss-0, gpu-0-usr, gpu0, kgsl. MediaTek: mtktsgpu, gpu_.
+    private val GPU_ZONE = Regex("^(gpu|gpuss|mtktsgpu|kgsl)")
+
     fun parseTempC(raw: String?): Float? {
         val v = raw?.trim()?.toLongOrNull() ?: return null
         return when {

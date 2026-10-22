@@ -4,6 +4,18 @@ Each version is listed in English, then in Portuguese. `scripts/release.sh` publ
 
 Cada versão aparece em inglês e depois em português. O `scripts/release.sh` publica a secção da versão que está a ser lançada como notas da release no GitHub.
 
+## v0.12
+
+### 🛠️ Fixes
+
+- **Missing CPU / GPU temperatures in the HUD (Thor, Retroid and other 8 Gen 2 devices):** on some firmwares the system doesn't let apps read the temperature sensors directly, and Odin Hub used to skip them. Those sensors are now read through PServerBinder, all in a single call per second. Sensor names from more kernels are also recognized.
+- **New: Sensor diagnostics** in the Performance HUD card. It lists every temperature sensor on the device, with its type, whether it can be read directly or only with root, and which ones the HUD uses. **Copy** and **Share** buttons make it easy to send in a bug report.
+
+### 🇧🇷 Português
+
+- **Temperaturas da CPU / GPU faltando no HUD (Thor, Retroid e outros 8 Gen 2):** em alguns firmwares o sistema não deixa os apps lerem os sensores de temperatura diretamente, e o Odin Hub os ignorava. Agora esses sensores são lidos pelo PServerBinder, todos numa única chamada por segundo. Também são reconhecidos os nomes de sensores de mais kernels.
+- **Novo: Diagnóstico dos sensores** no cartão do HUD de Desempenho. Lista todos os sensores de temperatura do aparelho, com o tipo, se dá para ler direto ou só com root, e quais o HUD usa. Os botões **Copiar** e **Partilhar** facilitam enviar num relato de bug.
+
 ## v0.11
 
 > ⚠️ **Reinstall once.** Releases are now built and signed on the developer's machine, always with the same key, so from now on updates install over the previous version, straight from the app. Older releases were signed with a different key by GitHub, so uninstall your current Odin Hub once and install this APK.

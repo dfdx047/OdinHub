@@ -110,4 +110,20 @@ class HudFpsAndFreqTest {
         assertEquals(0, HudMath.cpuUsageFromIdle(9_000_000L, 1_000_000L, 8)) // relógios desalinhados
         assertNull(HudMath.cpuUsageFromIdle(1L, 0L, 8))
     }
+
+    @Test
+    fun `zonas termicas do 8 Gen 2 e leitura por root`() {
+        for (t in listOf("cpu-0-0-0", "cpu-1-7-1", "cpuss-0", "cpullc-0", "cpu0-silver-usr", "mtktscpu")) assertEquals(t, "CPU", HudMath.zoneRole(t))
+        for (t in listOf("gpuss-0", "gpu-0-usr", "GPU0", "mtktsgpu")) assertEquals(t, "GPU", HudMath.zoneRole(t))
+        for (t in listOf("battery", "skin-msm-therm", "aoss-0", "ddr", null)) assertNull(HudMath.zoneRole(t))
+        val out = """
+            /sys/class/thermal/thermal_zone12/temp:51200
+            grep: /sys/class/thermal/thermal_zone13/temp: Permission denied
+            /sys/class/thermal/thermal_zone14/temp:49800
+        """.trimIndent()
+        assertEquals(
+            mapOf("/sys/class/thermal/thermal_zone12/temp" to "51200", "/sys/class/thermal/thermal_zone14/temp" to "49800"),
+            HudMath.parseGrepH(out),
+        )
+    }
 }
