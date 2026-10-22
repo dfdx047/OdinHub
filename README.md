@@ -83,7 +83,7 @@ Change a game in one place and the other reflects it. There is no second source 
 - **TDP profiles** — Power Save, Balanced and Triple A, sized for **the device it's running on** (7 / 10 / 15 W on the Odin 3, 5 / 7 / 10 W on the Odin 2, 3.5 / 4.5 / 6 W on the Retroid Pocket 5 — see the table below), plus Stock (no limit). Profiles are independent from the free slider.
 - **Per-cluster clock control** — the real frequencies of each CPU cluster (Efficiency / Perf / Prime on three-cluster chips like the 8 Gen 2 and 865, including the top "boost" OPPs) and the GPU, read live from the kernel's OPP tables, with a static per-SoC table as fallback. Only one of TDP or manual clocks is active at a time.
 - **Thermal limit** — optionally move the first-stage passive trip points of the CPU/GPU thermal zones (85 / 90 / 95 °C or unthrottled), globally or per game. Written through PServerBinder like everything else — no KernelSU/Magisk needed. Emergency trips and **fan trips** are never touched, and Stock restores the factory values (the backup is tied to the current boot, so it can never "restore" a modified value).
-- **Fan control** — Stock, Quiet, Smart and Sport, mapped to the device's real fan modes.
+- **Fan control** — Stock, Quiet, Smart and Sport, mapped to the device's real fan modes, plus a **custom fan curve**: drag the points on a graph (or fine-tune them with the D-pad), follow the CPU, the GPU or the hottest of the two, watch the live temperature and fan speed, and run CPU / GPU stress tests. At 90 °C or more the fan always runs at 100 %.
 - **Custom profiles** — save your own TDP or clock presets by name.
 
 ### Display

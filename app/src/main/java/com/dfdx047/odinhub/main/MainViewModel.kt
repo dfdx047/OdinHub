@@ -60,7 +60,36 @@ class MainViewModel @Inject constructor(
     private val soundManager: SoundManager,
     private val updateManager: com.dfdx047.odinhub.tools.UpdateManager,
     private val hudSampler: com.dfdx047.odinhub.tools.hardware.HudSampler,
+    private val fanCurveController: com.dfdx047.odinhub.tools.hardware.FanCurveController,
 ) : ViewModel() {
+
+    // ---- Curva da ventoinha ----
+    private val _fanCurve = kotlinx.coroutines.flow.MutableStateFlow(prefs.fanCurveConfig)
+    val fanCurve: StateFlow<com.dfdx047.odinhub.models.FanCurveConfig> = _fanCurve
+    private val _fanStatus = kotlinx.coroutines.flow.MutableStateFlow(com.dfdx047.odinhub.tools.hardware.FanStatus())
+    val fanStatus: StateFlow<com.dfdx047.odinhub.tools.hardware.FanStatus> = _fanStatus
+    private var fanStatusJob: kotlinx.coroutines.Job? = null
+
+    /** Enquanto o ecrã da curva está aberto: temperaturas e velocidade, a cada segundo. */
+    fun setFanEditorOpen(open: Boolean) {
+        fanStatusJob?.cancel()
+        if (!open) return
+        fanStatusJob = viewModelScope.launch(Dispatchers.IO) {
+            while (true) {
+                runCatching { _fanStatus.value = fanCurveController.readStatus() }
+                kotlinx.coroutines.delay(1000)
+            }
+        }
+    }
+
+    /** Guardar: grava a curva e liga o modo "Custom" (global). */
+    fun saveFanCurve(config: com.dfdx047.odinhub.models.FanCurveConfig) {
+        prefs.fanCurveConfig = config
+        _fanCurve.value = config
+        updateFanMode(com.dfdx047.odinhub.models.FanMode.Custom.settingsValue)
+    }
+
+    fun testFan(config: com.dfdx047.odinhub.models.FanCurveConfig) = fanCurveController.testSpeed(config)
 
     /** Relatório do "Diagnóstico dos sensores" (null = diálogo fechado; "" = a gerar). */
     private val _sensorReport = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
@@ -164,6 +193,7 @@ class MainViewModel @Inject constructor(
 
         // Auto-update: verificação discreta no arranque (no máximo a cada 6 h).
         // (A verificação ao abrir é feita em onAppResumed, chamada pelo ecrã principal.)
+        fanCurveController.start()
 
         // O motor gráfico (camada Vulkan real para ReShade/SGSR/LSFG) foi removido -- não estava
         // estável em hardware real (travava o próprio processo da app, ver histórico). Voltamos

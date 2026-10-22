@@ -83,7 +83,7 @@ Mude um jogo num lugar e o outro reflete. Não existe uma segunda fonte de verda
 - **Perfis de TDP**: Economia, Equilibrado e Triple A, dimensionados para **o aparelho em que está rodando** (7 / 10 / 15 W no Odin 3, 5 / 7 / 10 W no Odin 2, 3,5 / 4,5 / 6 W no Retroid Pocket 5; veja a tabela abaixo), mais Stock (sem limite). Os perfis são independentes do slider livre.
 - **Clock por cluster**: as frequências reais de cada cluster da CPU (Eficiência / Perf / Prime nos chips de três clusters, como o 8 Gen 2 e o 865, incluindo os degraus "boost" de topo) e da GPU, lidas ao vivo das tabelas do kernel, com uma tabela fixa por SoC como reserva. Só um dos dois fica ativo de cada vez: TDP ou clocks manuais.
 - **Limite térmico**: opcionalmente, mude os primeiros pontos de throttling passivo das zonas térmicas da CPU/GPU (85 / 90 / 95 °C ou sem limite), no global ou por jogo. É escrito pelo PServerBinder como todo o resto, sem precisar de KernelSU/Magisk. Os pontos de emergência e os **da ventoinha** nunca são mexidos, e o Stock restaura os valores de fábrica (o backup é ligado ao boot atual, então nunca "restaura" um valor já modificado).
-- **Controle da ventoinha**: Stock, Silencioso, Inteligente e Sport, ligados aos modos reais da ventoinha do aparelho.
+- **Controle da ventoinha**: Stock, Silencioso, Inteligente e Sport, ligados aos modos reais da ventoinha do aparelho, mais uma **curva de ventoinha personalizada**: arraste os pontos num gráfico (ou afine pelo D-pad), siga a CPU, a GPU ou a mais quente das duas, veja a temperatura e a velocidade ao vivo e rode testes de stress da CPU e da GPU. A partir de 90 °C a ventoinha vai sempre a 100 %.
 - **Perfis personalizados**: salve os seus próprios presets de TDP ou de clocks com um nome.
 
 ### Tela

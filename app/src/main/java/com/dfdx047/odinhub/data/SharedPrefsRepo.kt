@@ -151,6 +151,10 @@ class SharedPrefsRepo @Inject constructor(
     /** Regra térmica por jogo ativa quando o processo morreu (para a desfazer no arranque seguinte). */
     var thermalOverrideActive: Boolean get() = prefs.getBoolean("thermal_override_active", false); set(value) = prefs.edit().putBoolean("thermal_override_active", value).apply()
     /** Valor de `fan_mode` do sistema antes de a app o mudar (-1 = nenhum guardado). */
+    /** Curva personalizada da ventoinha (FanCurveConfig.encode). */
+    var fanCurveConfig: com.dfdx047.odinhub.models.FanCurveConfig
+        get() = com.dfdx047.odinhub.models.FanCurveConfig.decode(prefs.getString("fan_curve", null))
+        set(value) = prefs.edit().putString("fan_curve", value.encode()).apply()
     var fanModeBackup: Int get() = prefs.getInt("fan_mode_backup", -1); set(value) { prefs.edit().putInt("fan_mode_backup", value).commit() }
     var thermalDisableZoneMode: Boolean get() = prefs.getBoolean("thermal_disable_zone_mode", false); set(value) = prefs.edit().putBoolean("thermal_disable_zone_mode", value).apply()
     // Clocks manuais: por omissão o máximo do aparelho atual (antes eram os 3530/4320/1100 MHz

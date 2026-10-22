@@ -4,6 +4,41 @@ Each version is listed in English, then in Portuguese. `scripts/release.sh` publ
 
 Cada versão aparece em inglês e depois em português. O `scripts/release.sh` publica a secção da versão que está a ser lançada como notas da release no GitHub.
 
+## v0.13 — Custom fan curve
+
+### ✨ New
+
+- **Custom fan curve,** in the spirit of AYN's own fan screen (Performance › Fan Control › **Custom fan curve › Edit**):
+  - Drag the points on the graph, or tap one and fine-tune it with − / + (it works with the D-pad).
+  - °C or °F, and the curve can follow the CPU, the GPU or whichever is hotter.
+  - Current status (CPU and GPU temperature, fan speed) and an orange dot that shows where you are on the curve.
+  - CPU and GPU stress tests (60 s) to watch the curve react, plus Save and Reset.
+  - Adjustable smoothing, so the fan doesn't keep speeding up and slowing down.
+  - **Safety:** at 90 °C or more the fan always runs at 100 %, and if no temperature can be read the fan runs at 100 %.
+  - Saving turns on the new **Custom** fan mode. It's also available in the side overlay and in per-game rules.
+- Odin Hub drives the fan through the firmware's manual-speed mode. If the fan doesn't respond on your device, the editor's **Advanced** section lets you pick another firmware mode or speed unit, with a **Test** button (100 % for 5 s) to check.
+
+### 🛠️ Fixes
+
+- **AYN Thor: battery, power draw and GPU load in the HUD** (they showed `--`). This firmware doesn't let apps read the battery and GPU-load nodes. Battery %, power draw and battery temperature now come from Android's own battery API, and GPU load is read through PServerBinder.
+- **AutoTDP on the Thor:** it had no power reading for the same reason, so it couldn't settle on the target. It now uses the same fallback.
+- **Sensor diagnostics** also lists the battery and GPU nodes (read directly, read with root, and the Android API value).
+
+### 🇧🇷 Português
+
+- **Curva da ventoinha personalizada,** no estilo do ecrã de ventoinha da AYN (Desempenho › Controle de Ventoinha › **Curva da ventoinha personalizada › Editar**):
+  - Arraste os pontos no gráfico, ou toque num e afine com − / + (funciona com o D-pad).
+  - °C ou °F, e a curva pode seguir a CPU, a GPU ou a mais quente das duas.
+  - Estado atual (temperatura da CPU e da GPU, velocidade da ventoinha) e um ponto laranja que mostra onde você está na curva.
+  - Testes de stress da CPU e da GPU (60 s) para ver a curva reagir, além de Guardar e Repor.
+  - Suavização ajustável, para a ventoinha não ficar acelerando e desacelerando sem parar.
+  - **Segurança:** a partir de 90 °C a ventoinha vai sempre a 100 %, e se não houver leitura de temperatura também vai a 100 %.
+  - Guardar liga o novo modo de ventoinha **Custom**, que também aparece no overlay lateral e nas regras por jogo.
+- O Odin Hub controla a ventoinha pelo modo de velocidade manual do firmware. Se a ventoinha não responder no seu aparelho, a seção **Avançado** do editor deixa escolher outro modo ou unidade de velocidade, com um botão **Testar** (100 % durante 5 s) para confirmar.
+- **AYN Thor: bateria, consumo e uso da GPU no HUD** (apareciam `--`). Este firmware não deixa os apps lerem os nós da bateria e do uso da GPU. A bateria %, o consumo e a temperatura da bateria passam a vir da API de bateria do próprio Android, e o uso da GPU é lido pelo PServerBinder.
+- **AutoTDP no Thor:** pelo mesmo motivo ficava sem medição de consumo e não conseguia estabilizar no alvo. Agora usa o mesmo recurso.
+- **Diagnóstico dos sensores** também lista os nós da bateria e da GPU (leitura direta, leitura com root e o valor da API do Android).
+
 ## v0.12
 
 ### 🛠️ Fixes

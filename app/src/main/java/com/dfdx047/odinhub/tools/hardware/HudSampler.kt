@@ -203,11 +203,14 @@ class HudSampler @Inject constructor(
         val ram = if (cfg.has(HudMetric.RAM)) HudMath.parseMeminfo(readText("/proc/meminfo")) else null
         val battery = "/sys/class/power_supply/battery"
         val status = readText("$battery/status")?.lowercase()
+        // Sysfs da bateria bloqueado para apps (AYN Thor): cai para a API do Android.
+        val api by lazy { BatteryReader.read(context) }
         val power = if (cfg.has(HudMetric.POWER)) {
             val c = readLong("$battery/current_now")
             val v = readLong("$battery/voltage_now")
-            if (c != null && v != null) AutoTdpController.batteryWatts(c, v) else null
+            if (c != null && v != null) AutoTdpController.batteryWatts(c, v) else api.watts
         } else null
+        val charging = if (status != null) status == "charging" || status == "full" else api.externallyPowered == true
 
         return HudSnapshot(
             fps = fps,
@@ -224,9 +227,9 @@ class HudSampler @Inject constructor(
             ramUsedMB = ram?.first,
             ramTotalMB = ram?.second,
             powerW = power,
-            charging = status == "charging" || status == "full",
-            batteryPercent = if (cfg.has(HudMetric.BATTERY)) readLong("$battery/capacity")?.toInt() else null,
-            batteryTempC = if (cfg.has(HudMetric.BATTERY_TEMP)) HudMath.parseTempC(readText("$battery/temp")) else null,
+            charging = charging,
+            batteryPercent = if (cfg.has(HudMetric.BATTERY)) readLong("$battery/capacity")?.toInt() ?: api.percent else null,
+            batteryTempC = if (cfg.has(HudMetric.BATTERY_TEMP)) HudMath.parseTempC(readText("$battery/temp")) ?: api.tempC else null,
             tdpTargetW = if (cfg.has(HudMetric.TDP)) performanceManager.autoTdpStatus.value.takeIf { it.active }?.targetWatts else null,
         )
     }
@@ -244,6 +247,8 @@ class HudSampler @Inject constructor(
     private fun gpuLoad(): Int? =
         readText("/sys/class/kgsl/kgsl-3d0/gpu_busy_percentage")?.let { AutoTdpController.parseGpuBusy(it) }
             ?: readText("/sys/kernel/ged/hal/gpu_utilization")?.let { Regex("\\d+").find(it)?.value?.toIntOrNull() }
+            // Ilegível para apps neste firmware (AYN Thor): pelo PServer.
+            ?: performanceManager.gpuBusyPercent()
 
     private fun gpuMHz(): Int? {
         val hz = readLong("/sys/class/kgsl/kgsl-3d0/gpuclk")
@@ -254,6 +259,10 @@ class HudSampler @Inject constructor(
             Regex("\\d+").findAll(raw).mapNotNull { it.value.toLongOrNull() }.lastOrNull()?.let { (it / 1000).toInt() }
         }
     }
+
+    /** Temperatura máxima das zonas da CPU / GPU (também usada pela curva da ventoinha). */
+    fun cpuTempC(): Float? = maxTemp(cpuZones)
+    fun gpuTempC(): Float? = maxTemp(gpuZones)
 
     private fun maxTemp(list: List<Zone>): Float? {
         if (list.isEmpty()) return null
@@ -317,7 +326,24 @@ class HudSampler @Inject constructor(
         sb.appendLine()
         sb.appendLine("HUD usa — CPU: ${cpuZones.joinToString { it.type ?: it.name }.ifEmpty { "nenhuma" }}")
         sb.appendLine("HUD usa — GPU: ${gpuZones.joinToString { it.type ?: it.name }.ifEmpty { "nenhuma" }}")
-        sb.appendLine("Bateria: ${readText("/sys/class/power_supply/battery/temp") ?: "negado"}")
+        sb.appendLine()
+        sb.appendLine("Outros nós (direto | root):")
+        val others = listOf(
+            "/sys/class/power_supply/battery/capacity",
+            "/sys/class/power_supply/battery/current_now",
+            "/sys/class/power_supply/battery/voltage_now",
+            "/sys/class/power_supply/battery/status",
+            "/sys/class/power_supply/battery/temp",
+            "/sys/class/kgsl/kgsl-3d0/gpu_busy_percentage",
+            "/sys/class/kgsl/kgsl-3d0/gpubusy",
+            "/sys/class/kgsl/kgsl-3d0/gpuclk",
+            "/sys/kernel/ged/hal/gpu_utilization",
+        )
+        val rootOthers = if (executor.outputCaptureWorks) HudMath.parseGrepH(executor.executeAsRoot("grep -H . " + others.joinToString(" ")).getOrNull()) else emptyMap()
+        for (path in others) sb.appendLine("${path.substringAfterLast("/sys/")} | ${readText(path) ?: "negado"} | ${rootOthers[path] ?: "-"}")
+        val api = BatteryReader.read(context)
+        sb.appendLine("API do Android: bateria ${api.percent ?: "?"}% · ${api.watts?.let { "%.2f W".format(java.util.Locale.US, it) } ?: "? W"} · ${api.tempC ?: "?"}°C · externa=${api.externallyPowered}")
+        sb.appendLine("GPU (app): ${gpuLoad()?.let { "$it%" } ?: "?"}")
         return sb.toString()
     }
 

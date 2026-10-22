@@ -583,6 +583,41 @@ fun PerformancePanel(uiState: MainUiModel, viewModel: MainViewModel, theme: Cons
             }
         }
 
+        // Curva personalizada (modo "Custom"): editor a ecrã inteiro, como o da AYN.
+        var showFanEditor by remember { mutableStateOf(false) }
+        Row(
+            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(theme.scrim)
+                .border(1.dp, theme.text.copy(alpha = 0.1f), RoundedCornerShape(8.dp))
+                .clickable { showFanEditor = true; playClick() }.padding(horizontal = 14.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(if (isEn) "Custom fan curve" else "Curva da ventoinha personalizada", color = theme.text, fontFamily = theme.fontFamily, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                Text(
+                    if (isEn) "Set the fan speed for each temperature (mode \"Custom\")" else "Defina a velocidade da ventoinha para cada temperatura (modo \"Custom\")",
+                    color = theme.text.copy(alpha = 0.6f), fontFamily = theme.fontFamily, fontSize = 11.sp,
+                )
+            }
+            Text(if (isEn) "Edit >" else "Editar >", color = theme.primary, fontWeight = FontWeight.Bold, fontFamily = theme.fontFamily, fontSize = 12.sp)
+        }
+        if (showFanEditor) {
+            val fanCurve by viewModel.fanCurve.collectAsState()
+            val fanStatus by viewModel.fanStatus.collectAsState()
+            DisposableEffect(Unit) {
+                viewModel.setFanEditorOpen(true)
+                onDispose { viewModel.setFanEditorOpen(false) }
+            }
+            FanCurveDialog(
+                initial = fanCurve,
+                status = fanStatus,
+                theme = theme,
+                isEn = isEn,
+                onSave = { viewModel.saveFanCurve(it); playClick() },
+                onTest = { viewModel.testFan(it) },
+                onClose = { showFanEditor = false },
+            )
+        }
+
         ConsoleSectionHeader(if (isEn) "Hardware Limitation Mode" else "Modo de Limitação de Hardware", theme)
         Row(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(theme.scrim).border(1.dp, theme.text.copy(alpha = 0.1f), RoundedCornerShape(12.dp)).padding(4.dp)) {
             Box(modifier = Modifier.weight(1f).clip(RoundedCornerShape(8.dp)).background(if (isTdpMode) theme.primary.copy(alpha = 0.8f) else Color.Transparent).clickable { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove); viewModel.updateLimitMode("TDP"); playClick() }.padding(vertical = 12.dp), contentAlignment = Alignment.Center) { Text(if (isEn) "Lock by TDP" else "Limitar por TDP", color = if (isTdpMode) theme.onPrimary else theme.text.copy(alpha=0.6f), fontWeight = FontWeight.Bold, fontFamily = theme.fontFamily) }

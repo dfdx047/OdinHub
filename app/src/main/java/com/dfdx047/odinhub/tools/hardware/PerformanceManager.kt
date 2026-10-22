@@ -185,6 +185,15 @@ class PerformanceManager @Inject constructor(
      * BLOQUEANTE (root) -- chamar fora da thread principal.
      */
     fun applyFanMode(fanMode: FanMode) {
+        // Curva própria: guarda o modo do firmware (para o Stock o repor) e entrega a ventoinha
+        // ao FanCurveController. Qualquer outro modo desliga a curva.
+        FanCurveState.active.value = fanMode == FanMode.Custom
+        if (fanMode == FanMode.Custom) {
+            if (prefs.fanModeBackup < 0) {
+                executor.getIntSystemSettingOrNull(FanMode.FAN_MODE)?.let { prefs.fanModeBackup = it }
+            }
+            return
+        }
         if (fanMode in FanMode.selectable) {
             if (prefs.fanModeBackup < 0) {
                 executor.getIntSystemSettingOrNull(FanMode.FAN_MODE)?.let { prefs.fanModeBackup = it }
@@ -569,9 +578,11 @@ class PerformanceManager @Inject constructor(
         raw.orEmpty().trim().split(Regex("\\s+")).mapNotNull { it.toLongOrNull() }.filter { it > 0 }.distinct().sorted()
 
     private fun readBatteryWatts(): Float? {
-        val current = readLocal("$BATTERY/current_now")?.toLongOrNull() ?: return null
-        val voltage = readLocal("$BATTERY/voltage_now")?.toLongOrNull() ?: return null
-        return AutoTdpController.batteryWatts(current, voltage).takeIf { it > 0f }
+        val current = readLocal("$BATTERY/current_now")?.toLongOrNull()
+        val voltage = readLocal("$BATTERY/voltage_now")?.toLongOrNull()
+        if (current != null && voltage != null) return AutoTdpController.batteryWatts(current, voltage).takeIf { it > 0f }
+        // Sysfs da bateria bloqueado para apps (AYN Thor): API do Android.
+        return BatteryReader.read(context).watts
     }
 
     /**
@@ -579,11 +590,29 @@ class PerformanceManager @Inject constructor(
      * "Not charging" (separação de carga / bypass ligado à corrente) a medição não serve.
      */
     private fun isExternallyPowered(): Boolean {
-        val status = readLocal("$BATTERY/status")?.lowercase() ?: return false
+        val status = readLocal("$BATTERY/status")?.lowercase()
+            ?: return BatteryReader.read(context).externallyPowered ?: false
         return status != "discharging" && status != "unknown"
     }
 
-    private fun readGpuBusy(): Int? = gpu.busyPath?.let { gpu.parseBusy(readLocal(it)) }
+    private fun readGpuBusy(): Int? = gpuBusyPercent()
+
+    /**
+     * Ocupação da GPU (0-100). Leitura direta; se o SELinux a bloquear (AYN Thor:
+     * `gpu_busy_percentage` ilegível para apps), pelo PServer -- e lembra-se de qual funcionou.
+     */
+    fun gpuBusyPercent(): Int? {
+        val path = gpu.busyPath ?: return null
+        if (!gpuBusyNeedsRoot) {
+            val direct = readLocal(path)
+            if (direct != null) return gpu.parseBusy(direct)
+            gpuBusyNeedsRoot = true
+        }
+        if (!executor.outputCaptureWorks) return null
+        return gpu.parseBusy(executor.executeAsRoot("cat $path").getOrNull()?.trim())
+    }
+
+    @Volatile private var gpuBusyNeedsRoot = false
 
     private fun isInteractive(): Boolean = powerManager?.isInteractive ?: true
 
