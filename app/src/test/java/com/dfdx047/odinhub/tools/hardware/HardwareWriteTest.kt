@@ -42,16 +42,22 @@ class HardwareWriteTest {
         runCatching { HardwareWriteOp("x", "/sys/a; rm -rf /", "1") }.let { assertTrue(it.isFailure) }
         runCatching { HardwareWriteOp("x", "/sys/a", "1 > /data/x") }.let { assertTrue(it.isFailure) }
         val ok = HardwareWriteOp("x", "/proc/ppm/policy/hard_userlimit_max_cpu_freq", "0 2000000")
-        assertEquals("chmod 666 /proc/ppm/policy/hard_userlimit_max_cpu_freq && echo 0 2000000 > /proc/ppm/policy/hard_userlimit_max_cpu_freq && chmod 444 /proc/ppm/policy/hard_userlimit_max_cpu_freq", ok.asChainedCommand())
+        assertEquals(
+            listOf(
+                "chmod 666 /proc/ppm/policy/hard_userlimit_max_cpu_freq",
+                "echo 0 2000000 > /proc/ppm/policy/hard_userlimit_max_cpu_freq",
+                "chmod 444 /proc/ppm/policy/hard_userlimit_max_cpu_freq",
+            ),
+            ok.asSequentialCommands(),
+        )
     }
 
     @Test
     fun `sem lockMode nao mexe nas permissoes (nunca deixa 0666)`() {
         val op = HardwareWriteOp("min", "/sys/devices/system/cpu/cpufreq/policy0/scaling_min_freq", "902400", lockMode = null)
         assertEquals(listOf("echo 902400 > /sys/devices/system/cpu/cpufreq/policy0/scaling_min_freq"), op.asSequentialCommands())
-        assertFalse(op.asChainedCommand().contains("chmod"))
         val restore = op.copy(lockMode = "664")
-        assertTrue(restore.asChainedCommand().endsWith("chmod 664 /sys/devices/system/cpu/cpufreq/policy0/scaling_min_freq"))
+        assertEquals("chmod 664 /sys/devices/system/cpu/cpufreq/policy0/scaling_min_freq", restore.asSequentialCommands().last())
     }
 
     @Test
@@ -60,26 +66,6 @@ class HardwareWriteTest {
         assertEquals("680000000", gpu.opFor(680_000_000L, "444")?.value)
         assertEquals("220000000", gpu.opFor(500_000_000L, "444")?.value)
         assertEquals("124800000", gpu.opFor(1L, "444")?.value)
-    }
-
-    @Test
-    fun `MediaTek GED escreve o indice do OPP (0 = mais rapido)`() {
-        val dump = """
-            [00] freq = 836000, volt = 75000, vsram = 75000
-            [01] freq = 700000, volt = 70000, vsram = 75000
-            [02] freq = 390000, volt = 60000, vsram = 75000
-        """.trimIndent()
-        val opps = GpuControl.MtkGed.parseOppDump(dump)
-        assertEquals(listOf(836_000_000L, 700_000_000L, 390_000_000L), opps)
-        val gpu = GpuControl.MtkGed(opps)
-        assertEquals(0, gpu.indexFor(836_000_000L))
-        assertEquals(1, gpu.indexFor(800_000_000L))
-        assertEquals(2, gpu.indexFor(100_000_000L))
-        val op = gpu.opFor(700_000_000L, "444")!!
-        assertEquals("1", op.value)
-        assertNull(op.lockMode) // o nó do GED nunca é trancado
-        assertFalse(op.verify)
-        assertEquals(45, gpu.parseBusy("45 3 52"))
     }
 
     @Test

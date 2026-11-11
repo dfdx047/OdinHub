@@ -118,19 +118,32 @@ fun HudSettingsCard(
                 }
             }
             Text(
-                if (isEn) "FPS / frame time and CPU load are read through PServerBinder once per second; everything else is read directly."
-                else "FPS / frame time e uso da CPU são lidos pelo PServerBinder uma vez por segundo; o resto é leitura direta.",
+                if (isEn) "FPS / frame time come from the game layer's real frame present times (SurfaceFlinger), read through PServerBinder once per second; everything else is read directly."
+                else "FPS / frame time vêm dos tempos reais de apresentação dos frames da camada do jogo (SurfaceFlinger), lidos pelo PServerBinder uma vez por segundo; o resto é leitura direta.",
                 color = theme.secondaryText, fontFamily = theme.fontFamily, fontSize = 10.sp, modifier = Modifier.padding(top = 6.dp),
             )
 
             Spacer(Modifier.height(10.dp))
-            SectionLabel(if (isEn) "TEXT SIZE" else "TAMANHO DO TEXTO", theme)
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                HudConfig.TEXT_SCALES.forEachIndexed { i, scale ->
-                    val label = when (i) { 0 -> if (isEn) "Small" else "Pequeno"; 1 -> if (isEn) "Medium" else "Médio"; else -> if (isEn) "Large" else "Grande" }
-                    HudChip(label, config.textScale == scale, theme, Modifier.weight(1f)) { onChange(config.copy(textScale = scale)) }
+            SectionLabel(if (isEn) "STYLE" else "ESTILO", theme)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                com.dfdx047.odinhub.models.HudStyle.entries.forEach { st ->
+                    HudChip(st.label(isEn), config.style == st, theme) { onChange(config.copy(style = st)) }
                 }
             }
+
+            Spacer(Modifier.height(10.dp))
+            Text((if (isEn) "Size: " else "Tamanho: ") + "%.2f×".format(java.util.Locale.US, config.textScale), color = theme.text, fontFamily = theme.fontFamily, fontSize = 12.sp)
+            Slider(
+                value = config.textScale.coerceIn(HudConfig.MIN_SCALE, HudConfig.MAX_SCALE),
+                onValueChange = { onChange(config.copy(textScale = HudConfig.clampScale(it))) },
+                valueRange = HudConfig.MIN_SCALE..HudConfig.MAX_SCALE,
+                colors = SliderDefaults.colors(thumbColor = theme.primary, activeTrackColor = theme.primary),
+            )
+            Text(
+                if (isEn) "On the HUD itself: drag to move, pinch or drag the corner handle (appears after a touch) to resize, double tap to hide."
+                else "No próprio HUD: arraste para mover, faça pinça ou arraste a alça do canto (aparece ao tocar) para redimensionar, dois toques para esconder.",
+                color = theme.secondaryText, fontFamily = theme.fontFamily, fontSize = 10.sp,
+            )
 
             Spacer(Modifier.height(10.dp))
             Text((if (isEn) "Background opacity: " else "Opacidade do fundo: ") + "${(config.backgroundOpacity * 100).toInt()}%", color = theme.text, fontFamily = theme.fontFamily, fontSize = 12.sp)

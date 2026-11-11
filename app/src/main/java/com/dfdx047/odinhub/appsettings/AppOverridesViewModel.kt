@@ -71,6 +71,10 @@ data class AppOverrideUiState(
     val m2MacroMode: MacroMode = MacroMode.GLOBAL,
     val m2MacroSteps: List<MacroStep> = emptyList(),
     val macroEditorFor: String? = null,
+    /** Núcleos desligados neste jogo (bit N = cpuN, ver CpuHotplug); `null` = segue o global. */
+    val offlineCpuMask: Int? = null,
+    /** Clusters/GPU com clock fixo neste jogo (ver ClockPin); `null` = segue o global. */
+    val clockPinMask: Int? = null,
 
     val isSaved: Boolean = false,
     val availableReshadeProfiles: List<String> = listOf("Native", "Vibrant", "Retro", "HDR Boost", "Game Clarity", "Cinematic"),
@@ -97,6 +101,10 @@ class AppOverrideViewModel @Inject constructor(
 
     /** Botões M1/M2 remapeáveis neste aparelho? (o cartão das macros só aparece se sim) */
     val hasBackButtons: StateFlow<Boolean> = deviceCapabilities.backButtons
+
+    /** Clusters do aparelho e núcleos que existem (para o cartão dos núcleos deste jogo). */
+    val cpuClusters: List<com.dfdx047.odinhub.tools.hardware.CpuCluster> = performanceManager.clusters
+    val possibleCpus: List<Int> = performanceManager.possibleCpus
 
     /** O limite térmico funciona neste aparelho? (não no MediaTek -- ver DeviceProfiles) */
     val thermalSupported: Boolean = com.dfdx047.odinhub.tools.DeviceRegistry.current.thermal.supported
@@ -215,6 +223,8 @@ class AppOverrideViewModel @Inject constructor(
                 m1MacroSteps = ButtonMacros.decode(entity.m1Macro),
                 m2MacroMode = MacroMode.of(entity.m2Macro),
                 m2MacroSteps = ButtonMacros.decode(entity.m2Macro),
+                offlineCpuMask = entity.offlineCpuMask,
+                clockPinMask = entity.clockPinMask,
 
                 isSaved = true
             )
@@ -284,6 +294,36 @@ class AppOverrideViewModel @Inject constructor(
         }
     }
 
+    /** `null` = segue o global; senão a máscara (já com as regras de segurança do CpuHotplug). */
+    fun updateCoreMask(mask: Int?) {
+        markEdited()
+        val safe = mask?.let { com.dfdx047.odinhub.tools.hardware.CpuHotplug.sanitize(it, possibleCpus.ifEmpty { (0..7).toList() }) }
+        _uiState.update { it.copy(offlineCpuMask = safe) }
+    }
+    fun updateClockPinMask(mask: Int?) { markEdited(); _uiState.update { it.copy(clockPinMask = mask) } }
+
+    /**
+     * Copia os ajustes deste ecrã para o perfil GLOBAL (vale para todos os jogos sem regra
+     * própria). Núcleos/clocks fixos só se este jogo tiver os seus ("Própria do jogo").
+     */
+    fun saveAsGlobal() {
+        val c = _uiState.value
+        prefs.activeLimitMode = c.limitMode
+        prefs.tdpProfileId = c.tdpProfileId
+        prefs.tdpValue = c.tdpWatts
+        prefs.cpuPerfClock = c.perfClockMHz
+        prefs.cpuPrimeClock = c.primeClockMHz
+        prefs.cpuEffClock = c.effClockMHz
+        prefs.gpuClock = c.gpuClockMHz
+        if (c.fanSettingsValue != FanMode.Stock.settingsValue) prefs.fanMode = c.fanSettingsValue
+        c.offlineCpuMask?.let { prefs.offlineCpuMask = it }
+        c.clockPinMask?.let { prefs.clockPinMask = it }
+        if (c.displayOverride) {
+            prefs.saturationOverride = c.saturationOverride
+            prefs.temperatureOverride = c.temperatureOverride
+        }
+    }
+
     fun saveOverride() {
         viewModelScope.launch {
             val current = _uiState.value
@@ -329,6 +369,8 @@ class AppOverrideViewModel @Inject constructor(
                 thermalMode = current.thermalMode,
                 m1Macro = MacroMode.encode(current.m1MacroMode, current.m1MacroSteps),
                 m2Macro = MacroMode.encode(current.m2MacroMode, current.m2MacroSteps),
+                offlineCpuMask = current.offlineCpuMask,
+                clockPinMask = current.clockPinMask,
             )
             overrideRepository.upsert(entity)
             _uiState.update { it.copy(isSaved = true) }

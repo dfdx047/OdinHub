@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    SÓ nos builds debug: recetor para os testes no aparelho por adb. Protegido por
+    android.permission.DUMP (só o shell do adb e o sistema a têm), e só aceita ações fixas que
+    chamam a API normal do PerformanceManager, nunca comandos arbitrários. Não existe no release.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <receiver
+            android:name=".debug.DebugTestReceiver"
+            android:exported="true"
+            android:permission="android.permission.DUMP">
+            <intent-filter>
+                <action android:name="com.dfdx047.odinhub.debug.TEST" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

@@ -37,12 +37,14 @@ import com.dfdx047.odinhub.models.FeatureFlags
 import com.dfdx047.odinhub.models.TdpProfiles
 import com.dfdx047.odinhub.tools.ButtonActionHandler
 import com.dfdx047.odinhub.tools.ForegroundAppTracker
+import com.dfdx047.odinhub.ui.screens.autoTdpLine
+import com.dfdx047.odinhub.ui.screens.ClockPinRow
 import com.dfdx047.odinhub.models.ButtonMacros
 import com.dfdx047.odinhub.models.MacroMode
 import com.dfdx047.odinhub.models.MacroStep
 import com.dfdx047.odinhub.ui.screens.MacroModeChips
-import com.dfdx047.odinhub.ui.screens.autoTdpLine
 import com.dfdx047.odinhub.ui.screens.MacroStepsEditor
+import com.dfdx047.odinhub.ui.screens.CoreToggleGrid
 import com.dfdx047.odinhub.tools.hardware.DisplayManager
 import com.dfdx047.odinhub.tools.hardware.PerformanceManager
 import com.dfdx047.odinhub.tools.hardware.ThermalLimitModes
@@ -67,7 +69,9 @@ private const val TAB_VISUALS = 0
 private const val TAB_UPSCALING = 1
 private const val TAB_PERFORMANCE = 2
 private const val TAB_DISPLAY = 3
-private const val TAB_BUTTONS = 4
+private const val TAB_CORES = 4
+private const val TAB_BUTTONS = 5
+private const val TAB_HUD = 6
 
 @Composable
 fun QuickAccessContent(
@@ -208,8 +212,12 @@ private fun QuickAccessPanel(
     fun applyTdpLive(watts: Float) = performanceManager.applyDynamicTdp(watts)
     // Cluster de eficiência (8 Gen 2 / 865): declarado aqui em cima porque o applyClocksLive o lê.
     var cpuEffClock by remember(currentPackage) { mutableFloatStateOf(overridesByPackage[currentPackage]?.effClockKHz?.let { it / 1000f } ?: prefs.cpuEffClock) }
+    // Clocks fixos (ver ClockPin) deste jogo; null na regra = segue o global.
+    var clockPinMask by remember(currentPackage) { mutableIntStateOf(overridesByPackage[currentPackage]?.clockPinMask ?: prefs.clockPinMask) }
     fun applyClocksLive(perfMHz: Float, primeMHz: Float, gpuMHz: Float) =
-        performanceManager.applyAbsoluteClocks((perfMHz * 1000).toLong(), (primeMHz * 1000).toLong(), (gpuMHz * 1_000_000).toLong(), (cpuEffClock * 1000).toLong())
+        performanceManager.applyAbsoluteClocks((perfMHz * 1000).toLong(), (primeMHz * 1000).toLong(), (gpuMHz * 1_000_000).toLong(), (cpuEffClock * 1000).toLong(), clockPinMask)
+    // Núcleos desligados deste jogo (ver CpuHotplug); null na regra = segue o global.
+    var offlineCpuMask by remember(currentPackage) { mutableIntStateOf(overridesByPackage[currentPackage]?.offlineCpuMask ?: prefs.offlineCpuMask) }
 
     // CAUSA RAIZ (auditoria): tudo aqui era lido/escrito só no SharedPrefs (`prefs.getPerApp*`
     // / `prefs.savePerAppConfig`), um armazenamento TOTALMENTE separado da tabela Room que a
@@ -230,17 +238,19 @@ private fun QuickAccessPanel(
 
     // Separadores: ids estáveis (e não índices) para poder esconder os de gráficos quando o motor
     // não está disponível (FeatureFlags.GRAPHICS_ENGINE_AVAILABLE) sem baralhar os restantes.
-    // O separador dos botões só existe em aparelhos com M1/M2 remapeáveis (ver DeviceCapabilities).
+    // O separador dos botões só existe com M1/M2 remapeáveis (ver DeviceCapabilities).
     val hasBackButtons by buttonActions.backButtons.collectAsState()
     val tabIds = buildList {
         add(TAB_PERFORMANCE)
+        add(TAB_CORES)
+        add(TAB_HUD)
         add(TAB_DISPLAY)
         if (hasBackButtons) add(TAB_BUTTONS)
-        add(TAB_VISUALS)
+        if (FeatureFlags.GRAPHICS_ENGINE_AVAILABLE) add(TAB_VISUALS)
         if (FeatureFlags.GRAPHICS_ENGINE_AVAILABLE) add(TAB_UPSCALING)
     }
     var chosenTab by remember { mutableIntStateOf(tabIds.first()) }
-    // Se o separador escolhido deixar de existir (ex: botões M1/M2), mostra o primeiro.
+    // Se o separador escolhido deixar de existir (ex: motor gráfico), mostra o primeiro.
     val selectedTab = if (chosenTab in tabIds) chosenTab else tabIds.first()
 
     var reshadeProfile by remember(currentApp) { mutableStateOf(existingOverride?.reshadeProfile ?: prefs.reshadeProfile) }
@@ -346,6 +356,8 @@ private fun QuickAccessPanel(
             prefs.cpuEffClock = cpuEffClock
             prefs.gpuClock = gpuClock
             prefs.fanMode = fanMode
+            prefs.offlineCpuMask = offlineCpuMask
+            prefs.clockPinMask = clockPinMask
             return
         }
 
@@ -387,11 +399,79 @@ private fun QuickAccessPanel(
             thermalMode = thermalMode,
             m1Macro = MacroMode.encode(m1Mode, m1Steps.toList()),
             m2Macro = MacroMode.encode(m2Mode, m2Steps.toList()),
+            offlineCpuMask = offlineCpuMask,
+            clockPinMask = clockPinMask,
         )
         // Escrita no scope do repositório, não no do Compose: ver AppOverrideRepository.upsertAsync
         // -- a gravação feita no `onDispose` (painel a fechar / troca de jogo) caía num scope já
         // cancelado e perdia-se.
         overrideRepository.upsertAsync(entity)
+    }
+
+    // ---- Perfil global <-> perfil do jogo ----
+    // Mensagem curta depois de "Salvar como global" / "Usar o global" (some sozinha).
+    var profileNotice by remember(currentApp) { mutableStateOf<String?>(null) }
+    LaunchedEffect(profileNotice) { if (profileNotice != null) { delay(2_500); profileNotice = null } }
+
+    /**
+     * "Salvar como global": copia o que está no painel (modo, TDP, clocks, núcleos, clocks fixos,
+     * ventoinha e cor) para o perfil GLOBAL, que vale para todos os jogos sem regra própria.
+     * O limite térmico não é copiado: o global aplica-se pelo ThermalManager, com backups próprios.
+     */
+    fun saveAsGlobal() {
+        prefs.activeLimitMode = activeLimitMode
+        prefs.tdpProfileId = tdpProfileId
+        prefs.tdpValue = tdpValue
+        prefs.cpuPerfClock = cpuPerfClock
+        prefs.cpuPrimeClock = cpuPrimeClock
+        prefs.cpuEffClock = cpuEffClock
+        prefs.gpuClock = gpuClock
+        prefs.fanMode = fanMode
+        prefs.offlineCpuMask = offlineCpuMask
+        prefs.clockPinMask = clockPinMask
+        if (displayOverride) {
+            prefs.saturationOverride = saturation
+            prefs.temperatureOverride = temperature
+        }
+        profileNotice = if (isEn) "Saved as the global profile ✓" else "Salvo como perfil global ✓"
+    }
+
+    /**
+     * "Usar o global": apaga a regra deste jogo e volta a aplicar o perfil global na hora
+     * (o mesmo que o ForegroundAppWatcherService faz ao entrar num jogo sem regra).
+     */
+    fun useGlobalProfile() {
+        val pkg = currentApp
+        touchedByUser = false
+        overrideRepository.deleteAsync(pkg)
+        activeLimitMode = prefs.activeLimitMode
+        tdpProfileId = prefs.tdpProfileId
+        tdpValue = prefs.tdpValue
+        cpuPerfClock = prefs.cpuPerfClock
+        cpuPrimeClock = prefs.cpuPrimeClock
+        cpuEffClock = prefs.cpuEffClock
+        gpuClock = prefs.gpuClock
+        fanMode = prefs.fanMode
+        offlineCpuMask = prefs.offlineCpuMask
+        clockPinMask = prefs.clockPinMask
+        thermalMode = null
+        displayOverride = false
+        saturation = prefs.saturationOverride
+        temperature = prefs.temperatureOverride
+        m1Mode = MacroMode.GLOBAL; m2Mode = MacroMode.GLOBAL
+        m1Steps.clear(); m2Steps.clear()
+
+        performanceManager.applyCoreMask(offlineCpuMask)
+        if (activeLimitMode == "TDP") performanceManager.applyTdpSelection(TdpProfiles.resolveWatts(tdpProfileId, tdpValue))
+        else applyClocksLive(cpuPerfClock, cpuPrimeClock, gpuClock)
+        thermalManager.setAppOverride(null)
+        val fan = com.dfdx047.odinhub.models.FanMode.fromSettingsValue(fanMode)
+        scope.launch(Dispatchers.IO) {
+            performanceManager.applyFanMode(fan)
+            displayManager.applyColor(prefs.saturationOverride, prefs.temperatureOverride)
+            buttonActions.setGameMacros(null, null)
+        }
+        profileNotice = if (isEn) "Now following the global profile" else "Agora segue o perfil global"
     }
 
     // Rede de segurança: grava o estado final quando o painel fecha ou o utilizador troca de jogo
@@ -412,62 +492,29 @@ private fun QuickAccessPanel(
     }
 
     Column(modifier = Modifier.padding(16.dp).fillMaxSize().verticalScroll(rememberScrollState())) {
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text("ODIN HUB", color = theme.primary, fontWeight = FontWeight.Black, fontSize = 18.sp, letterSpacing = 1.sp)
-                Text(
-                    text = if (currentApp == ForegroundAppTracker.GLOBAL) (if (isEn) "Global profile" else "Perfil global") else (if (isEn) "Profile: $currentAppLabel" else "Perfil de $currentAppLabel"),
-                    color = theme.text.copy(alpha = 0.6f),
-                    fontSize = 10.sp,
-                )
-            }
-            Box(modifier = Modifier.size(28.dp).clip(RoundedCornerShape(8.dp)).background(theme.surface.copy(alpha = 0.6f)).clickable { onClose() }, contentAlignment = Alignment.Center) {
-                Text("✕", color = theme.text, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-            }
-        }
+        PanelHeader(
+            theme = theme, isEn = isEn, currentApp = currentApp, currentAppLabel = currentAppLabel,
+            tabIds = tabIds, selectedTab = selectedTab, onSelectTab = { chosenTab = it }, onClose = onClose,
+        )
 
-        Spacer(modifier = Modifier.height(12.dp))
-
-        Row(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(theme.scrim).padding(4.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-            tabIds.forEach { tabId ->
-                val title = when (tabId) {
-                    TAB_VISUALS -> if (FeatureFlags.GRAPHICS_ENGINE_AVAILABLE) "Visuals" else (if (isEn) "Overlay" else "Overlay")
-                    TAB_UPSCALING -> "Upscaling"
-                    TAB_DISPLAY -> if (isEn) "Display" else "Ecrã"
-                    TAB_BUTTONS -> if (isEn) "Buttons" else "Botões"
-                    else -> "Performance"
-                }
-                val isSelected = selectedTab == tabId
-                Box(modifier = Modifier.weight(1f).clip(RoundedCornerShape(6.dp)).background(if (isSelected) theme.primary else Color.Transparent).clickable { chosenTab = tabId }.padding(vertical = 8.dp), contentAlignment = Alignment.Center) {
-                    Text(title, color = if (isSelected) theme.onPrimary else theme.text.copy(alpha = 0.6f), fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                }
-            }
+        // Dentro de um jogo: o painel grava sozinho na regra do jogo; estes dois botões tornam
+        // explícito o caminho para o perfil global (copiar para lá, ou largar a regra do jogo).
+        if (currentApp != ForegroundAppTracker.GLOBAL && currentApp.isNotBlank()) {
+            Spacer(modifier = Modifier.height(10.dp))
+            ProfileActionsBar(
+                theme = theme, isEn = isEn,
+                hasOwnRule = existingOverride != null || touchedByUser,
+                notice = profileNotice,
+                onSaveAsGlobal = { saveAsGlobal() },
+                onUseGlobal = { useGlobalProfile() },
+            )
         }
 
         Spacer(modifier = Modifier.height(16.dp))
 
         when (selectedTab) {
             TAB_VISUALS -> {
-                Text(if (isEn) "OVERLAY APPEARANCE" else "APARÊNCIA DO OVERLAY", color = theme.text.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                Spacer(modifier = Modifier.height(8.dp))
-                Column(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(theme.surface.copy(alpha = 0.5f)).padding(12.dp)) {
-                    Text((if (isEn) "Background opacity: " else "Opacidade do fundo: ") + "${(panelOpacity * 100).toInt()}%", color = theme.text, fontSize = 11.sp)
-                    Slider(value = panelOpacity, onValueChange = onOpacityChange, valueRange = 0.1f..1.0f, colors = SliderDefaults.colors(thumbColor = theme.primary, activeTrackColor = theme.primary))
-                }
-
-                // Atalho para o HUD de desempenho (as métricas configuram-se no Odin Hub > Sistema).
-                Spacer(modifier = Modifier.height(16.dp))
-                Text(if (isEn) "PERFORMANCE HUD" else "HUD DE DESEMPENHO", color = theme.text.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                Spacer(modifier = Modifier.height(8.dp))
-                val hudConfig by prefs.hudConfigFlow.collectAsState()
-                val hudHidden by com.dfdx047.odinhub.service.PerformanceHudService.hiddenFlow.collectAsState()
-                val hudOn = hudConfig.enabled && !hudHidden
-                Row(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(theme.surface.copy(alpha = 0.5f)).clickable {
-                    com.dfdx047.odinhub.service.PerformanceHudService.toggle(context, prefs)
-                }.padding(12.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    Text(if (isEn) "Show FPS / temperatures HUD" else "Mostrar HUD de FPS / temperaturas", color = theme.text, fontSize = 11.sp, modifier = Modifier.weight(1f))
-                    Text(if (hudOn) "ON" else "OFF", color = if (hudOn) theme.primary else theme.text.copy(alpha = 0.5f), fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                }
+                PanelOpacitySection(theme, isEn, panelOpacity, onOpacityChange)
 
                 if (FeatureFlags.GRAPHICS_ENGINE_AVAILABLE) {
                 Spacer(modifier = Modifier.height(16.dp))
@@ -510,6 +557,34 @@ private fun QuickAccessPanel(
                     }
                 }
             }
+            TAB_CORES -> {
+                val coreStates by performanceManager.coreStates.collectAsState()
+                Text(if (isEn) "CPU CORES (THIS GAME)" else "NÚCLEOS DA CPU (ESTE JOGO)", color = theme.text.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                Spacer(modifier = Modifier.height(8.dp))
+                Column(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(theme.surface.copy(alpha = 0.5f)).padding(12.dp)) {
+                    CoreToggleGrid(
+                        clusters = performanceManager.clusters, possible = performanceManager.possibleCpus,
+                        mask = offlineCpuMask, realStates = coreStates, theme = theme, isEn = isEn,
+                    ) { newMask ->
+                        offlineCpuMask = newMask
+                        performanceManager.applyCoreMask(newMask)
+                        persistOverride()
+                    }
+                }
+                if (activeLimitMode == "CLOCK") {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Column(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(theme.surface.copy(alpha = 0.5f)).padding(12.dp)) {
+                        ClockPinRow(
+                            pinMask = clockPinMask, kinds = performanceManager.clusters.map { it.kind },
+                            hasGpu = true, theme = theme, isEn = isEn,
+                        ) { newPin ->
+                            clockPinMask = newPin
+                            applyClocksLive(cpuPerfClock, cpuPrimeClock, gpuClock)
+                            persistOverride()
+                        }
+                    }
+                }
+            }
             TAB_BUTTONS -> {
                 Text(if (isEn) "BACK BUTTON MACROS" else "MACROS DOS BOTÕES TRASEIROS", color = theme.text.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
                 Spacer(modifier = Modifier.height(8.dp))
@@ -549,6 +624,14 @@ private fun QuickAccessPanel(
                         Spacer(modifier = Modifier.height(10.dp))
                         MacroStepsEditor(steps = steps, theme = theme, isEn = isEn, compact = true, onChanged = { persistOverride(); applyMacrosLive() })
                     }
+                }
+            }
+            TAB_HUD -> {
+                HudOverlayControls(theme, isEn, prefs)
+                // Sem o motor gráfico não há separador "Visuals": a opacidade do painel fica aqui.
+                if (!FeatureFlags.GRAPHICS_ENGINE_AVAILABLE) {
+                    Spacer(modifier = Modifier.height(16.dp))
+                    PanelOpacitySection(theme, isEn, panelOpacity, onOpacityChange)
                 }
             }
             TAB_UPSCALING -> {
@@ -620,7 +703,11 @@ private fun QuickAccessPanel(
                     // acessibilidade reaplicava os perfis ao trocar de app.
                     for (mode in FanMode.selectable + FanMode.Stock) {
                         val isSel = if (mode == FanMode.Stock) FanMode.selectable.none { it.settingsValue == fanMode } else fanMode == mode.settingsValue
-                        Box(modifier = Modifier.weight(1f).clip(RoundedCornerShape(6.dp)).background(if (isSel) theme.primary else Color.Transparent).clickable { fanMode = mode.settingsValue; scope.launch(Dispatchers.IO) { performanceManager.applyFanMode(mode) }; persistOverride() }.padding(vertical = 8.dp), contentAlignment = Alignment.Center) {
+                        // "Stock" numa regra de jogo = segue o modo GLOBAL (é assim que o
+                        // ForegroundAppWatcherService lê o -1). Aplicar o Stock do firmware aqui
+                        // desligava, p. ex., a curva Custom global só até à troca de app seguinte.
+                        val effective = if (mode == FanMode.Stock && currentApp.isNotBlank() && currentApp != ForegroundAppTracker.GLOBAL) FanMode.fromSettingsValue(prefs.fanMode) else mode
+                        Box(modifier = Modifier.weight(1f).clip(RoundedCornerShape(6.dp)).background(if (isSel) theme.primary else Color.Transparent).clickable { fanMode = mode.settingsValue; scope.launch(Dispatchers.IO) { performanceManager.applyFanMode(effective) }; persistOverride() }.padding(vertical = 8.dp), contentAlignment = Alignment.Center) {
                             Text(mode.shortLabel, color = if (isSel) theme.onPrimary else theme.text.copy(alpha = 0.6f), fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         }
                     }
@@ -797,5 +884,127 @@ private fun QuickAccessPanel(
                 }
             }
         }
+    }
+}
+
+/*
+ * Partes do painel em funções próprias: o QuickAccessPanel inteiro numa só função @Composable
+ * passava dos 256 registos da Dalvik, e o D8 gerava código que o verificador do ART rejeitava
+ * (VerifyError "register vNNN has type Reference ... but expected Integer") ao abrir o overlay,
+ * o que derrubava a app toda ao arrancar o GamingOverlayService.
+ */
+
+/** Título, perfil atual, botão de fechar e separadores do painel. */
+@Composable
+private fun PanelHeader(
+    theme: ConsoleTheme,
+    isEn: Boolean,
+    currentApp: String,
+    currentAppLabel: String,
+    tabIds: List<Int>,
+    selectedTab: Int,
+    onSelectTab: (Int) -> Unit,
+    onClose: () -> Unit,
+) {
+    val isGlobal = currentApp == ForegroundAppTracker.GLOBAL
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+        Column(modifier = Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("ODIN", color = theme.primary, fontWeight = FontWeight.Black, fontSize = 18.sp, letterSpacing = 2.sp)
+                Spacer(modifier = Modifier.width(5.dp))
+                Text("HUB", color = theme.text, fontWeight = FontWeight.Light, fontSize = 18.sp, letterSpacing = 2.sp)
+            }
+            Spacer(modifier = Modifier.height(4.dp))
+            // Selo do perfil: deixa claro se as mudanças vão para o jogo ou para o global.
+            Row(
+                modifier = Modifier.clip(RoundedCornerShape(50)).background(if (isGlobal) theme.text.copy(alpha = 0.08f) else theme.primary.copy(alpha = 0.18f)).padding(horizontal = 8.dp, vertical = 3.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(modifier = Modifier.size(6.dp).clip(RoundedCornerShape(50)).background(if (isGlobal) theme.text.copy(alpha = 0.5f) else theme.primary))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = if (isGlobal) (if (isEn) "Global profile" else "Perfil global") else (if (isEn) "Game profile · $currentAppLabel" else "Perfil do jogo · $currentAppLabel"),
+                    color = theme.text.copy(alpha = 0.85f), fontSize = 10.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
+                )
+            }
+        }
+        Box(modifier = Modifier.size(30.dp).clip(RoundedCornerShape(9.dp)).background(theme.surface.copy(alpha = 0.6f)).clickable { onClose() }, contentAlignment = Alignment.Center) {
+            Text("✕", color = theme.text, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+        }
+    }
+
+    Spacer(modifier = Modifier.height(12.dp))
+
+    // Até 6 separadores em 390 dp: a barra rola na horizontal em vez de espremer os nomes.
+    Row(
+        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(theme.scrim).horizontalScroll(rememberScrollState()).padding(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        tabIds.forEach { tabId ->
+            val title = when (tabId) {
+                TAB_VISUALS -> "Visuals"
+                TAB_UPSCALING -> "Upscaling"
+                TAB_DISPLAY -> if (isEn) "Display" else "Tela"
+                TAB_CORES -> if (isEn) "Cores" else "Núcleos"
+                TAB_BUTTONS -> if (isEn) "Buttons" else "Botões"
+                TAB_HUD -> "HUD"
+                else -> if (isEn) "Performance" else "Desempenho"
+            }
+            val isSelected = selectedTab == tabId
+            Box(
+                modifier = Modifier.clip(RoundedCornerShape(7.dp)).background(if (isSelected) theme.primary else Color.Transparent)
+                    .clickable { onSelectTab(tabId) }.padding(horizontal = 12.dp, vertical = 8.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(title, color = if (isSelected) theme.onPrimary else theme.text.copy(alpha = 0.6f), fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+            }
+        }
+    }
+}
+
+/** Estado da regra do jogo + "Salvar como global" / "Usar o global". */
+@Composable
+private fun ProfileActionsBar(
+    theme: ConsoleTheme,
+    isEn: Boolean,
+    hasOwnRule: Boolean,
+    notice: String?,
+    onSaveAsGlobal: () -> Unit,
+    onUseGlobal: () -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(theme.surface.copy(alpha = 0.5f)).padding(10.dp)) {
+        Text(
+            notice ?: if (hasOwnRule) (if (isEn) "This game has its own settings (saved automatically)" else "Este jogo tem ajustes próprios (salvos sozinhos)")
+            else (if (isEn) "This game follows the global profile" else "Este jogo segue o perfil global"),
+            color = if (notice != null) theme.primary else theme.text.copy(alpha = 0.7f), fontSize = 10.sp, fontWeight = if (notice != null) FontWeight.Bold else FontWeight.Normal,
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Box(
+                modifier = Modifier.weight(1f).clip(RoundedCornerShape(8.dp)).background(theme.primary).clickable(onClick = onSaveAsGlobal).padding(vertical = 8.dp),
+                contentAlignment = Alignment.Center,
+            ) { Text(if (isEn) "Save as global" else "Salvar como global", color = theme.onPrimary, fontSize = 11.sp, fontWeight = FontWeight.Bold) }
+            Box(
+                modifier = Modifier.weight(1f).clip(RoundedCornerShape(8.dp)).border(1.dp, theme.text.copy(alpha = if (hasOwnRule) 0.3f else 0.1f), RoundedCornerShape(8.dp))
+                    .clickable(enabled = hasOwnRule, onClick = onUseGlobal).padding(vertical = 8.dp),
+                contentAlignment = Alignment.Center,
+            ) { Text(if (isEn) "Use global" else "Usar o global", color = theme.text.copy(alpha = if (hasOwnRule) 0.9f else 0.35f), fontSize = 11.sp, fontWeight = FontWeight.Bold) }
+        }
+    }
+}
+
+/** Opacidade do fundo do painel. */
+@Composable
+private fun PanelOpacitySection(
+    theme: ConsoleTheme,
+    isEn: Boolean,
+    panelOpacity: Float,
+    onOpacityChange: (Float) -> Unit,
+) {
+    Text(if (isEn) "PANEL APPEARANCE" else "APARÊNCIA DO PAINEL", color = theme.text.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+    Spacer(modifier = Modifier.height(8.dp))
+    Column(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(theme.surface.copy(alpha = 0.5f)).padding(12.dp)) {
+        Text((if (isEn) "Background opacity: " else "Opacidade do fundo: ") + "${(panelOpacity * 100).toInt()}%", color = theme.text, fontSize = 11.sp)
+        Slider(value = panelOpacity, onValueChange = onOpacityChange, valueRange = 0.1f..1.0f, colors = SliderDefaults.colors(thumbColor = theme.primary, activeTrackColor = theme.primary))
     }
 }

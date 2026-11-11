@@ -5,7 +5,7 @@
 <h1 align="center">Odin Hub</h1>
 
 <p align="center">
-  Uma central de controle de hardware e desempenho, com cara de console, para os portáteis <b>AYN Odin</b> e <b>Retroid Pocket</b>.<br>
+  Uma central de controle de hardware e desempenho, com cara de console, para o <b>AYN Odin 3</b>.<br>
   Feito por <b>dfdx047</b>.
 </p>
 
@@ -15,7 +15,7 @@
 
 <p align="center">
   <a href="https://github.com/dfdx047/OdinHub/releases"><img src="https://img.shields.io/github/v/release/dfdx047/OdinHub?include_prereleases&label=download&style=for-the-badge" alt="Última versão"></a>
-  <img src="https://img.shields.io/badge/devices-Odin%202%20%7C%20Odin%203%20%7C%20Thor%20%7C%20Retroid-7c6cf0?style=for-the-badge" alt="AYN Odin / Thor / Retroid Pocket">
+  <img src="https://img.shields.io/badge/aparelho-AYN%20Odin%203-e5002b?style=for-the-badge" alt="AYN Odin 3">
   <img src="https://img.shields.io/badge/root-n%C3%A3o%20precisa-2ea44f?style=for-the-badge" alt="Não precisa de root">
 </p>
 
@@ -27,7 +27,7 @@
 
 ## O que é
 
-O Odin 3 vem com um Snapdragon 8 Elite (e o Odin 2, o Thor e o Retroid Pocket 6 com um 8 Gen 2), muito mais potente do que a maioria dos jogos e emuladores Android precisa. Sem controle, ele esquenta, gasta a bateria rápido e entra em throttling. Tudo isso para rodar um jogo de PS2 que ficaria feliz com um terço dessa potência.
+O Odin 3 vem com um Snapdragon 8 Elite, muito mais potente do que a maioria dos jogos e emuladores Android precisa. Sem controle, ele esquenta, gasta a bateria rápido e entra em throttling. Tudo isso para rodar um jogo de PS2 que ficaria feliz com um terço dessa potência.
 
 O Odin Hub fica entre você e esse chip. Ele deixa você decidir, **jogo a jogo**, quanto do aparelho gastar de fato:
 
@@ -69,21 +69,28 @@ Mude um jogo num lugar e o outro reflete. Não existe uma segunda fonte de verda
 
 | | |
 |---|---|
-| ![Clocks manuais](./docs/screenshots/02-manual-clocks.png) | ![Limite térmico](./docs/screenshots/03-thermal-limit.png) |
-| **Tabelas de clock reais**: cada chip é uma frequência que o SoC realmente suporta | **Limite térmico**: mude o ponto de throttling, no global ou por jogo |
-| ![Gestos do Home](./docs/screenshots/05-home-gestures.png) | ![Editor de macros](./docs/screenshots/06-macro-editor.png) |
-| **Gestos do botão Home**: captura de tela, gravação da tela inteira, overlay… | **Macros M1 / M2**: combos e sequências temporizadas, no global ou por jogo |
-| ![Calibração de cor](./docs/screenshots/07-color-calibration.png) | ![Regras por jogo](./docs/screenshots/04-per-game-rules.png) |
-| **Calibração de cor**: saturação e balanço de branco, ao vivo | **Regras por jogo**: aplicadas quando o jogo abre, desfeitas quando você sai |
+| ![Overlay no jogo](./docs/screenshots/02-overlay.png) | ![Controles do HUD no overlay](./docs/screenshots/03-overlay-hud.png) |
+| **Overlay no jogo**: mude o perfil do jogo no meio da partida, ou salve como o global | **Aba HUD**: ligue o HUD, escolha uma predefinição ou cada métrica, ao vivo |
+| ![Curva da ventoinha](./docs/screenshots/04-fan-curve.png) | ![Núcleos da CPU](./docs/screenshots/05-cpu-cores.png) |
+| **Curva da ventoinha personalizada**: arraste os pontos, siga a CPU, a GPU ou a mais quente | **Ligar e desligar núcleos**: no global ou por jogo; verde = realmente ligado |
+| ![Clocks manuais](./docs/screenshots/06-manual-clocks.png) | ![Regras por jogo](./docs/screenshots/07-per-game-rules.png) |
+| **Tabelas de clock reais**: cada chip é uma frequência que o Snapdragon 8 Elite realmente suporta | **Regras por jogo**: aplicadas quando o jogo abre, desfeitas quando você sai |
+| ![Limite térmico](./docs/screenshots/08-thermal-limit.png) | ![Gestos do Home](./docs/screenshots/09-home-gestures.png) |
+| **Limite térmico**: mude o ponto de throttling, no global ou por jogo | **Gestos do botão Home**: captura de tela, gravação da tela inteira, overlay… |
+| ![Editor de macros](./docs/screenshots/10-macro-editor.png) | ![Calibração de cor](./docs/screenshots/11-color-calibration.png) |
+| **Macros M1 / M2**: combos e sequências temporizadas, no global ou por jogo | **Calibração de cor**: saturação e balanço de branco, ao vivo |
 
 ## Recursos
 
 ### Desempenho
 - **TDP dinâmico (AutoTDP)**: um ciclo fechado que mede o consumo real na bateria e ajusta os clocks de CPU/GPU até o aparelho se estabilizar no consumo alvo. Ele filtra a leitura ruidosa da bateria, corta rápido quando passa do limite e sobe devagar quando sobra (sem engasgos em serra), e, quando a GPU é o gargalo, tira o corte da CPU (e vice-versa). Pausa durante a carga (a bateria não consegue medir o aparelho nessa hora) e com a tela desligada.
-- **Perfis de TDP**: Economia, Equilibrado e Triple A, dimensionados para **o aparelho em que está rodando** (7 / 10 / 15 W no Odin 3, 5 / 7 / 10 W no Odin 2, 3,5 / 4,5 / 6 W no Retroid Pocket 5; veja a tabela abaixo), mais Stock (sem limite). Os perfis são independentes do slider livre.
-- **Clock por cluster**: as frequências reais de cada cluster da CPU (Eficiência / Perf / Prime nos chips de três clusters, como o 8 Gen 2 e o 865, incluindo os degraus "boost" de topo) e da GPU, lidas ao vivo das tabelas do kernel, com uma tabela fixa por SoC como reserva. Só um dos dois fica ativo de cada vez: TDP ou clocks manuais.
+- **Perfis de TDP**: Economia (7 W), Equilibrado (10 W) e Triple A (15 W), dimensionados para o Snapdragon 8 Elite do Odin 3, mais Stock (sem limite). O slider livre vai até 25 W. Os perfis são independentes do slider.
+- **Clock por cluster**: as frequências reais dos dois clusters da CPU (6 núcleos Oryon e 2 núcleos Prime) e da Adreno 830, lidas ao vivo das tabelas do kernel, com a tabela do próprio Odin 3 como reserva. Só um dos dois fica ativo de cada vez: TDP ou clocks manuais.
+- **Fixar clocks**: fixa um cluster ou a GPU no teto (piso = teto), para um frame pacing estável.
+- **Ligar e desligar núcleos da CPU**: desligue núcleos no global ou por jogo, pelo Desempenho, pela aba **Núcleos** do overlay ou por uma regra do jogo. Os cartões mostram quais núcleos estão realmente ligados. O CPU0 nunca desliga, e todos voltam no Stock, quando você sai do jogo e ao ligar o aparelho.
+- **Salvar como perfil global**: um botão no overlay e nas regras por jogo copia os ajustes atuais para o perfil global; **Usar o global** apaga a regra própria do jogo.
 - **Limite térmico**: opcionalmente, mude os primeiros pontos de throttling passivo das zonas térmicas da CPU/GPU (85 / 90 / 95 °C ou sem limite), no global ou por jogo. É escrito pelo PServerBinder como todo o resto, sem precisar de KernelSU/Magisk. Os pontos de emergência e os **da ventoinha** nunca são mexidos, e o Stock restaura os valores de fábrica (o backup é ligado ao boot atual, então nunca "restaura" um valor já modificado).
-- **Controle da ventoinha**: Stock, Silencioso, Inteligente e Sport, ligados aos modos reais da ventoinha do aparelho, mais uma **curva de ventoinha personalizada**: arraste os pontos num gráfico (ou afine pelo D-pad), siga a CPU, a GPU ou a mais quente das duas, veja a temperatura e a velocidade ao vivo e rode testes de stress da CPU e da GPU. A partir de 90 °C a ventoinha vai sempre a 100 %.
+- **Controle da ventoinha**: Stock, Silencioso, Inteligente e Sport, ligados aos modos reais da ventoinha do Odin 3, mais uma **curva de ventoinha personalizada**: arraste os pontos num gráfico (ou afine pelo D-pad), siga a CPU, a GPU ou a mais quente das duas, veja a temperatura e a velocidade ao vivo e rode testes de stress da CPU e da GPU. A partir de 90 °C a ventoinha vai sempre a 100 %.
 - **Perfis personalizados**: salve os seus próprios presets de TDP ou de clocks com um nome.
 
 ### Tela
@@ -96,8 +103,9 @@ Mude um jogo num lugar e o outro reflete. Não existe uma segunda fonte de verda
 - Ligue um botão físico para abrir o overlay no jogo.
 
 ### HUD de desempenho
-- Uma pequena sobreposição estilo MangoHud por cima de **qualquer app**: FPS, frame time (com gráfico), uso e temperatura da CPU, clocks por cluster ou por núcleo, uso / temperatura / clock da GPU, RAM, consumo, bateria % e temperatura, alvo de TDP e hora.
-- **Tudo é opcional**: ligue ou desligue cada métrica. Barra horizontal ou painel vertical, cinco posições, arraste para mover, três tamanhos de texto, fundo ajustável.
+- Uma pequena sobreposição estilo MangoHud por cima de **qualquer app**: FPS real do SurfaceFlinger, frame time (com gráfico), uso e temperatura da CPU, clocks por cluster ou por núcleo, uso / temperatura / clock da GPU, RAM, consumo, bateria % e temperatura, alvo de TDP e hora.
+- **Tudo é opcional**: ligue ou desligue cada métrica, ou comece por uma predefinição (Só FPS, Essencial, Padrão, Completo). Barra horizontal ou painel vertical, vários estilos, cinco posições, arrastar suave, redimensionar com pinça ou pelo canto, fundo ajustável.
+- **Controlado de dentro do jogo**: a aba **HUD** do overlay lateral liga e desliga o HUD e muda predefinições, métricas, layout, estilo, posição, tamanho e fundo, com as mudanças em tempo real.
 - Segue o tema do app, incluindo o modo vidro. **Dois toques escondem o HUD**; ele volta pelo overlay lateral, pelo gesto do Home "Mostrar/esconder HUD de desempenho" ou pelas Configurações.
 - Leve: tudo é lido direto do sysfs (o uso da CPU vem do tempo ocioso dos núcleos); só o FPS / frame time precisa de uma chamada ao PServerBinder por segundo. A leitura para enquanto o HUD está escondido ou a tela está desligada.
 - A janela cresce quando você adiciona métricas, e a barra horizontal quebra para uma segunda linha em vez de sair da tela.
@@ -105,34 +113,28 @@ Mude um jogo num lugar e o outro reflete. Não existe uma segunda fonte de verda
 ### Interface
 - **Aparência de vidro**: um modo estilo Liquid Glass que funciona por cima de qualquer tema, com superfícies translúcidas e borda de luz; o overlay lateral também desfoca o jogo por trás quando o sistema permite.
 - **Atualização automática**: o Odin Hub procura uma versão nova no GitHub quando você o abre e a cada poucas horas em segundo plano (com notificação), mostra um pop-up com as novidades, baixa o APK e instala por cima pelo PServerBinder (ou passa para o instalador do Android).
-- Sete temas inspirados em consoles (Odin OS, Cyberpunk, SNES, NES, PlayStation, Xbox, Steam OS), mais um tema claro, cores dinâmicas do Material You e um modo AMOLED preto.
+- Temas em grupos, com seletor visual: **Assinatura Odin** (Odin Rubi, Odin Ártico, Odin Aurora, Brasa Elite), **Vibrantes** (Grade Neon, Verde Arena, Azul Vapor, Azul Real), **Retrô** (16-bit, 8-bit) e **Sistema** (cores dinâmicas do Material You), mais um modo AMOLED preto.
 - Navegável pelo D-pad, com vibração e brilho de foco.
 - Animação de boot, papéis de parede personalizados e um mixer de música de fundo e efeitos sonoros.
 
-## Aparelhos suportados
+## Aparelho suportado
 
-O Odin Hub detecta o aparelho ao abrir ("AYN Odin 2 detectado") e troca as tabelas de frequência, as zonas térmicas, o controle da GPU e os perfis de TDP para combinar. Todo o resto (overlay, regras por jogo, macros, gestos) é igual em todos: a AYN e a Retroid usam o mesmo firmware base do fabricante (Moorechip) e o mesmo `PServerBinder`.
+O Odin Hub é feito só para o **AYN Odin 3** (Snapdragon 8 Elite, 6 + 2 núcleos Oryon, Adreno 830). As tabelas de clock, as zonas térmicas, o controle da GPU e os perfis de TDP são ajustados para ele e foram testados no próprio aparelho (firmware 1.0.0.188).
 
-| Aparelho | SoC | Controle da GPU | Limite térmico | M1/M2 | Perfis de TDP (Eco / Equil. / AAA / máx.) |
-|---|---|---|---|---|---|
-| AYN Odin 3 | Snapdragon 8 Elite | Adreno 830 (kgsl) | ✓ | ✓ | 7 / 10 / 15 / 25 W |
-| AYN Odin 2 / Odin 2 Max / Odin 2 Portal | Snapdragon 8 Gen 2 (QCS8550) | Adreno 740, 680 MHz | ✓ | ✓ | 5 / 7 / 10 / 13 W |
-| AYN Odin 2 Mini | Snapdragon 8 Gen 2 | Adreno 740 | ✓ | ✓ | 4,5 / 6,5 / 9 / 12 W |
-| AYN Thor | Snapdragon 8 Gen 2 | Adreno 740 | ✓ | ✓ | 5 / 7 / 10 / 13 W |
-| AYN Thor Lite | Snapdragon 865 | Adreno 650 | ✓ | ✓ | 3,5 / 4,5 / 6 / 8 W |
-| Retroid Pocket 6 / Retroid Pocket Nova | Snapdragon 8 Gen 2 (QCS8550) | Adreno 740 | ✓ | se o firmware expuser | 4,5 / 6,5 / 9 / 12 W |
-| Retroid Pocket 5 | Snapdragon 865 | Adreno 650, 670 MHz | ✓ | se o firmware expuser | 3,5 / 4,5 / 6 / 8 W |
-| Retroid Pocket Mini / Mini V2 | Snapdragon 865 | Adreno 650 | ✓ | se o firmware expuser | 3 / 4 / 5,5 / 7 W |
-| Retroid Pocket 4 Pro | Dimensity 1100 | Mali-G77 (MediaTek GED) | — (a MediaTek faz o throttling no userspace) | se o firmware expuser | 3,5 / 4,5 / 6 / 8 W |
-| Retroid Pocket 4 | Dimensity 900 | Mali-G68 (MediaTek GED) | — | se o firmware expuser | 3 / 4 / 5 / 7 W |
+| | Odin 3 |
+|---|---|
+| SoC | Snapdragon 8 Elite (SM8750) |
+| CPU | 6 núcleos Oryon (cpu0-5) + 2 núcleos Prime (cpu6-7) |
+| Controle da GPU | Adreno 830 (kgsl), até 1100 MHz |
+| Limite térmico | ✓ |
+| M1 / M2 | ✓ |
+| Perfis de TDP (Economia / Equilibrado / Triple A / máx. do slider) | 7 / 10 / 15 / 25 W |
 
 Notas:
 
-- Os valores de TDP são o consumo do aparelho inteiro na bateria, dimensionados a partir de medições publicadas de cada SoC em jogos e do arrefecimento de cada modelo. Os degraus são bem separados de propósito, para os perfis fazerem diferença de verdade; ajuste a gosto com o slider.
-- No 8 Gen 2, as zonas térmicas do kernel têm pontos passivos de 50–85 °C que comandam a **ventoinha**, não o throttling; o Odin Hub os exclui (pelo dispositivo de arrefecimento e por uma temperatura mínima por SoC), para que um limite térmico nunca atrase a ventoinha.
-- No Thor e no Retroid Pocket 6, o firmware sobe a frequência mínima de cada cluster conforme o seu próprio modo de desempenho. Quando um limite fica abaixo desse piso, o Odin Hub baixa o piso também, para o limite valer de verdade.
-- Alguns firmwares (o Odin 2 Mini é o caso conhecido) não devolvem a saída dos comandos pelo PServerBinder. O Odin Hub detecta isso, passa para o modo sem saída e lê os valores direto do sysfs.
-- Aparelhos desconhecidos funcionam num modo genérico: tabelas lidas do kernel e os limites do SoC conhecido mais próximo.
+- Os valores de TDP são o consumo do aparelho inteiro na bateria. Os degraus são bem separados de propósito, para os perfis fazerem diferença de verdade; ajuste a gosto com o slider.
+- O firmware sobe a frequência mínima de cada cluster conforme o seu próprio modo de desempenho (perf HAL, `msm_performance`). Quando um limite fica abaixo desse piso, o Odin Hub baixa o piso também, para o limite valer de verdade, e o app mostra o motivo quando não consegue.
+- Outros aparelhos (Odin 2, Thor, Retroid Pocket) deixaram de ser suportados. Neles, use a v0.13.
 
 ## Como ele fala com o hardware
 
@@ -147,8 +149,8 @@ A detecção do app em primeiro plano usa um serviço de acessibilidade, com uma
 
 ## Requisitos
 
-- Um dos aparelhos acima (ou outro portátil Android, no modo genérico).
-- O `PServerBinder` disponível no aparelho (vem no firmware original da AYN e da Retroid).
+- Um AYN Odin 3.
+- O `PServerBinder` disponível no aparelho (vem no firmware original da AYN).
 - Permissões concedidas na primeira abertura: **Acesso ao uso** (detecção do app em primeiro plano) e **Sobrepor a outros apps** (o overlay no jogo).
 
 ## Instalação
@@ -157,7 +159,7 @@ A detecção do app em primeiro plano usa um serviço de acessibilidade, com uma
 2. Instale no aparelho.
 3. Abra e conceda as duas permissões que ele pede.
 
-Depois disso, as versões novas aparecem dentro do app (pop-up e notificação) e instalam por cima da antiga. Se você instalou a v0.10 ou anterior, desinstale-a uma vez antes de instalar a v0.11: essas versões foram assinadas com outra chave.
+Depois disso, as versões novas aparecem dentro do app (pop-up e notificação) e instalam por cima da antiga. Todas as versões a partir da v0.11 são assinadas com a mesma chave, então a v0.14 instala por cima da v0.11, v0.12 ou v0.13 e mantém suas configurações e regras por jogo. Se você instalou a v0.10 ou anterior, desinstale-a uma vez antes: essas versões foram assinadas com outra chave.
 
 ## Como lançar uma versão
 

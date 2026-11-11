@@ -56,6 +56,16 @@ data class MainUiModel(
     val cpuEffClock: Float = 0f,
     val gpuClock: Float = 0f,
     val activeLimitMode: String = "TDP",
+    /** Perfil global: núcleos desligados (bit N = cpuN, ver CpuHotplug). */
+    val offlineCpuMask: Int = 0,
+    /** Perfil global: clusters/GPU com clock fixo (ver ClockPin). */
+    val clockPinMask: Int = 0,
+    /** Estado REAL de cada núcleo, lido do sysfs. */
+    val coreStates: List<com.dfdx047.odinhub.tools.hardware.CoreState> = emptyList(),
+    /** GPU ao vivo (frequência, teto, máximo do kernel, temperatura). */
+    val gpuLive: com.dfdx047.odinhub.tools.hardware.GpuLiveInfo = com.dfdx047.odinhub.tools.hardware.GpuLiveInfo(),
+    /** Pisos impostos pelo modo de desempenho do firmware (msm_performance), por cluster, em MHz. */
+    val firmwareFloors: Map<com.dfdx047.odinhub.tools.hardware.ClusterKind, Int> = emptyMap(),
     val fanMode: Int = 0,
     val customProfiles: List<CustomProfile> = emptyList(),
 

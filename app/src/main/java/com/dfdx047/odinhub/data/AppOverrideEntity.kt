@@ -62,4 +62,14 @@ data class AppOverrideEntity(
      * segue o global. Em SoCs só com dois clusters (8 Elite, MediaTek) é ignorado.
      */
     val effClockKHz: Long? = null,
+
+    /**
+     * v9: núcleos desligados neste jogo (bit N = cpuN, ver CpuHotplug). `null` = segue o global;
+     * 0 = todos ligados. As regras de segurança (nunca o cpu0, sempre um ligado) aplicam-se na
+     * escrita. Ao sair do jogo volta tudo a ligar.
+     */
+    val offlineCpuMask: Int? = null,
+
+    /** v9: clusters/GPU com o clock fixo neste jogo (ver ClockPin). `null` = segue o global. */
+    val clockPinMask: Int? = null,
 )

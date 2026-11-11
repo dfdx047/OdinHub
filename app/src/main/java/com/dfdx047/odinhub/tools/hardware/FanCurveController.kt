@@ -3,8 +3,8 @@ package com.dfdx047.odinhub.tools.hardware
 import android.util.Log
 import com.dfdx047.odinhub.data.SharedPrefsRepo
 import com.dfdx047.odinhub.models.FanCurveConfig
+import com.dfdx047.odinhub.models.FanCurveTracker
 import com.dfdx047.odinhub.models.FanMode
-import com.dfdx047.odinhub.models.FanReference
 import com.dfdx047.odinhub.tools.ShellExecutor
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -23,6 +23,14 @@ import javax.inject.Singleton
 object FanCurveState {
     /** `true` com o modo de ventoinha "Custom" ativo (global ou da regra do jogo). */
     val active = MutableStateFlow(false)
+
+    /**
+     * Serializa as escritas da curva com as trocas de modo (PerformanceManager.applyFanMode).
+     * Sem isto, um tick a meio (chamadas root bloqueantes, que o cancelamento não interrompe)
+     * podia voltar a pôr `fan_mode` no modo manual DEPOIS de o Stock/Silent/... ter reposto o
+     * modo do firmware -- e a ventoinha ficava presa numa velocidade fixa sem ninguém a mexer-lhe.
+     */
+    val lock = Any()
 }
 
 /** O que o ecrã da curva mostra em "Estado atual". */
@@ -57,8 +65,8 @@ class FanCurveController @Inject constructor(
 
     val status = MutableStateFlow(FanStatus())
 
-    @Volatile private var lastPercent: Int? = null
-    @Volatile private var lastSetTemp: Float? = null
+    /** Histerese e trava dos 90 °C. Só o loop da curva lhe mexe. */
+    private val tracker = FanCurveTracker()
     @Volatile private var lastWrittenSpeed: Int? = null
     @Volatile private var testUntil = 0L
 
@@ -76,8 +84,7 @@ class FanCurveController @Inject constructor(
     }
 
     private fun resetState() {
-        lastPercent = null
-        lastSetTemp = null
+        tracker.reset()
         lastWrittenSpeed = null
     }
 
@@ -86,32 +93,29 @@ class FanCurveController @Inject constructor(
         while (currentCoroutineContext().isActive) {
             runCatching {
                 val cfg = prefs.fanCurveConfig
-                val cpu = sampler.cpuTempC()
-                val gpu = sampler.gpuTempC()
-                val temp = referenceTemp(cfg.reference, cpu, gpu)
-                val percent = when {
-                    System.currentTimeMillis() < testUntil -> 100
-                    // Sem leitura de temperatura não se arrisca: ventoinha ao máximo.
-                    temp == null -> 100
-                    else -> {
-                        val (p, t) = cfg.nextPercent(temp, lastPercent, lastSetTemp)
-                        lastPercent = p
-                        lastSetTemp = t
-                        p
-                    }
-                }
-                // O modo do firmware: confirmado a cada ~10 s (outra app/o firmware pode mudá-lo).
-                if (tick % 5 == 0) {
-                    val mode = executor.getIntSystemSettingOrNull(FanMode.FAN_MODE)
-                    if (mode != cfg.manualMode) {
-                        executor.setIntSystemSetting(FanMode.FAN_MODE, cfg.manualMode)
-                        lastWrittenSpeed = null // reescreve a velocidade no novo modo
-                    }
-                }
+                // Uma leitura que rebenta conta como "sem leitura" (-> 100 %), em vez de saltar o
+                // tick e deixar a ventoinha na velocidade anterior.
+                val cpu = runCatching { sampler.cpuTempC() }.getOrNull()
+                val gpu = runCatching { sampler.gpuTempC() }.getOrNull()
+                // Sem leitura / sensor mais quente >= 90 °C: 100 % (ver FanCurveTracker).
+                val curvePercent = tracker.next(cfg, cpu, gpu)
+                val percent = if (System.currentTimeMillis() < testUntil) 100 else curvePercent
                 val value = FanCurveConfig.fanSpeedValue(percent, cfg.unit)
-                if (value != lastWrittenSpeed) {
-                    executor.setIntSystemSetting(FanMode.FAN_SPEED, value)
-                    lastWrittenSpeed = value
+                synchronized(FanCurveState.lock) {
+                    // A curva foi desligada entretanto (Stock/Silent/... já repôs o modo): não escreve.
+                    if (!FanCurveState.active.value) return@runCatching
+                    // O modo do firmware: confirmado a cada ~10 s (outra app/o firmware pode mudá-lo).
+                    if (tick % 5 == 0) {
+                        val mode = executor.getIntSystemSettingOrNull(FanMode.FAN_MODE)
+                        if (mode != cfg.manualMode) {
+                            executor.setIntSystemSetting(FanMode.FAN_MODE, cfg.manualMode)
+                            lastWrittenSpeed = null // reescreve a velocidade no novo modo
+                        }
+                    }
+                    if (value != lastWrittenSpeed) {
+                        executor.setIntSystemSetting(FanMode.FAN_SPEED, value)
+                        lastWrittenSpeed = value
+                    }
                 }
                 status.value = FanStatus(cpu, gpu, percent, value, cfg.manualMode, curveActive = true)
             }.onFailure { Log.w(TAG, "tick da curva falhou", it) }
@@ -151,17 +155,13 @@ class FanCurveController @Inject constructor(
             executor.setIntSystemSetting(FanMode.FAN_SPEED, FanCurveConfig.fanSpeedValue(percent, cfg.unit))
             delay(ms)
             // Se entretanto a curva foi ligada, ela manda; senão volta tudo ao que estava.
-            if (!FanCurveState.active.value) {
-                oldSpeed?.let { executor.setIntSystemSetting(FanMode.FAN_SPEED, it) }
-                oldMode?.let { executor.setIntSystemSetting(FanMode.FAN_MODE, it) }
+            synchronized(FanCurveState.lock) {
+                if (!FanCurveState.active.value) {
+                    oldSpeed?.let { executor.setIntSystemSetting(FanMode.FAN_SPEED, it) }
+                    oldMode?.let { executor.setIntSystemSetting(FanMode.FAN_MODE, it) }
+                }
             }
         }
-    }
-
-    private fun referenceTemp(ref: FanReference, cpu: Float?, gpu: Float?): Float? = when (ref) {
-        FanReference.CPU -> cpu ?: gpu
-        FanReference.GPU -> gpu ?: cpu
-        FanReference.MAX -> listOfNotNull(cpu, gpu).maxOrNull()
     }
 
     private companion object {

@@ -19,6 +19,8 @@ data class CpuPolicyNode(
      * enquanto, na prática, o limite estava a ser aplicado.
      */
     val availableFreqsKHz: List<Long> = emptyList(),
+    /** Núcleos desta política (`related_cpus`). Vazia = desconhecido (nunca se salta a política). */
+    val cpus: List<Int> = emptyList(),
 )
 
 /**
@@ -47,8 +49,9 @@ const val SNAP_TOLERANCE = 999L
  * -> bloquear (444)" usado pelo Pulse/ClusterTune para conseguir escrever em nós protegidos pelo
  * kernel sem deixá-los permanentemente abertos a outros processos.
  *
- * Expomos os três passos separadamente (em vez de só a string encadeada) porque descobrimos que
- * encadear tudo com `&&` numa única transação binder tem duas falhas graves:
+ * Os três passos vão SEMPRE como transações binder separadas, um comando simples por chamada: o
+ * PServer não executa de forma fiável cadeias `a && b` / `a; b` (regra do projeto, ver CLAUDE.md).
+ * O Odin Hub ainda tentava primeiro a cadeia; encadear tinha duas falhas graves:
  *  1. Se qualquer nó no meio da cadeia for rejeitado pelo kernel (comum em GPUs/clusters
  *     bloqueados por bootloader), o `&&` aborta TODOS os passos seguintes — incluindo nós que
  *     não têm nada a ver com a falha. Isto por si só explica o comportamento "instável": qual
@@ -59,8 +62,7 @@ const val SNAP_TOLERANCE = 999L
  *     único argumento — funcionam bem para comandos simples (`getprop`, `settings put`) mas
  *     falham silenciosamente em cadeias compostas.
  *
- * [PerformanceManager] tenta primeiro a cadeia completa (mais rápida, 1 transação) e, se a
- * verificação de leitura falhar, recua para os três passos como transações binder separadas.
+ * [PerformanceManager] corre os passos um a um e verifica o nó por leitura no fim.
  */
 data class HardwareWriteOp(
     val label: String,
@@ -92,10 +94,7 @@ data class HardwareWriteOp(
     val writeCommand: String get() = "echo $value > $targetPath"
     val lockCommand: String? get() = lockMode?.let { "chmod $it $targetPath" }
 
-    /** Comando único e linear, usado como tentativa rápida quando o backend suporta `sh -c`. */
-    fun asChainedCommand(): String = listOfNotNull(unlockCommand, writeCommand, lockCommand).joinToString(" && ")
-
-    /** Os passos como comandos independentes, para execução sequencial e resiliente. */
+    /** Os passos como comandos independentes, um por chamada ao PServer. */
     fun asSequentialCommands(): List<String> = listOfNotNull(unlockCommand, writeCommand, lockCommand)
 
     companion object {
@@ -247,6 +246,101 @@ object PerformanceCommandBuilder {
         }
     }
 
+    /**
+     * Clocks com ordem segura entre piso e teto, e com a FIXAÇÃO opcional por cluster.
+     *
+     * Ordem: o kernel 4.19 recusa (`-EINVAL`) qualquer escrita que deixe `scaling_min_freq` acima
+     * de `scaling_max_freq`. O firmware Moorechip do RP5 sobe os pisos conforme o modo de
+     * desempenho (lido no aparelho: policy0 min 1420 MHz, policy4 2150, policy7 min = max), por
+     * isso um teto abaixo do piso tem de baixar o piso PRIMEIRO. No Odin Hub o piso ia depois do
+     * teto e a primeira escrita do teto falhava.
+     *
+     * Fixar ([pinMask], ver [ClockPin]): piso = teto = o alvo (o governador deixa de variar a
+     * frequência). Livre: o alvo é só o teto e o governador decide por baixo dele -- se o piso
+     * atual estiver acima do teto pedido, desce para o degrau MAIS BAIXO da tabela (descer só até
+     * ao alvo deixava piso = teto, ou seja, fixava sem o utilizador pedir).
+     *
+     * [currentMinKHz] lê o piso atual de um caminho (`null` = ilegível). [onlineCpus], quando
+     * dado, faz saltar políticas com todos os núcleos desligados (o kernel recusa escritas numa
+     * política inativa).
+     */
+    fun buildCpuClockOps(
+        policies: List<CpuPolicyNode>,
+        perfRatio: Float,
+        primeRatio: Float,
+        minRatio: Float = CPU_MIN_RATIO,
+        effRatio: Float? = null,
+        pinMask: Int = 0,
+        currentMinKHz: (String) -> Long? = { null },
+        onlineCpus: Set<Int>? = null,
+    ): List<HardwareWriteOp> {
+        val active = policies.filter { node -> onlineCpus == null || node.cpus.isEmpty() || node.cpus.any { it in onlineCpus } }
+        // Os ratios/rótulos dependem da posição na lista ORIGINAL (Prime = a mais rápida).
+        val maxOps = buildCpuFrequencyOps(policies, perfRatio, primeRatio, minRatio, effRatio)
+            .filter { op -> active.any { op.targetPath.startsWith(it.policyPath + "/") } }
+        return maxOps.flatMap { maxOp ->
+            val node = policies.firstOrNull { maxOp.targetPath.startsWith(it.policyPath + "/") }
+            val minPath = maxOp.targetPath.replace("scaling_max_freq", "scaling_min_freq")
+            val target = maxOp.value.toLong()
+            val currentMin = currentMinKHz(minPath)
+            val pinned = ClockPin.has(pinMask, ClockPin.forCpuLabel(maxOp.label))
+            when {
+                pinned -> {
+                    val minOp = HardwareWriteOp(maxOp.label + "-pin", minPath, maxOp.value, HardwareWriteOp.LOCKED_MODE)
+                    if (currentMin != null && target < currentMin) listOf(minOp, maxOp) else listOf(maxOp, minOp)
+                }
+                else -> {
+                    val floor = node?.availableFreqsKHz?.minOrNull()?.coerceAtMost(target) ?: target
+                    // Piso >= teto (firmware ou fixação anterior): desce-o para o fundo da tabela.
+                    if (currentMin != null && currentMin >= target && currentMin != floor) {
+                        listOf(HardwareWriteOp(maxOp.label + "-min", minPath, floor.toString(), lockMode = null), maxOp)
+                    } else {
+                        listOf(maxOp)
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * GPU Adreno: teto (`max_gpuclk`, Hz) e, se fixada, o piso (`min_clock_mhz`, MHz) no mesmo
+     * OPP -- com a mesma regra de ordem do CPU ([currentFloorMHz] = piso atual).
+     */
+    fun buildGpuClockOps(
+        maxOp: HardwareWriteOp?,
+        pinned: Boolean,
+        currentFloorMHz: Int?,
+        minPath: String = GPU_MIN_MHZ_PATH,
+        lowestMHz: Int? = null,
+    ): List<HardwareWriteOp> {
+        if (maxOp == null) return emptyList()
+        val targetMHz = (maxOp.value.toLong() / 1_000_000L).toInt()
+        if (!pinned) {
+            // Livre com o piso (o firmware põe 587 MHz no RP5) acima do teto: desce o piso primeiro.
+            val floor = lowestMHz?.coerceAtMost(targetMHz) ?: targetMHz
+            if (currentFloorMHz != null && currentFloorMHz >= targetMHz && currentFloorMHz != floor) {
+                return listOf(HardwareWriteOp("gpu-min", minPath, floor.toString(), lockMode = null), maxOp)
+            }
+            return listOf(maxOp)
+        }
+        val minOp = HardwareWriteOp("gpu-pin", minPath, targetMHz.toString(), HardwareWriteOp.LOCKED_MODE)
+        return if (currentFloorMHz != null && targetMHz < currentFloorMHz) listOf(minOp, maxOp) else listOf(maxOp, minOp)
+    }
+
+    const val GPU_MIN_MHZ_PATH = "/sys/class/kgsl/kgsl-3d0/min_clock_mhz"
+
+    /**
+     * Escritas de hotplug (`cpuN/online`), uma por núcleo, na ordem segura de [CpuHotplug.plan]
+     * (liga primeiro, desliga depois) e já com as regras de segurança (nunca o cpu0, sempre um
+     * ligado). [online] = estado atual lido do sysfs.
+     */
+    fun buildCpuOnlineOps(online: Map<Int, Boolean>, targetOffline: Int, possible: List<Int>, root: String = CPU_ROOT): List<HardwareWriteOp> =
+        CpuHotplug.plan(online, targetOffline, possible).map { (cpu, on) ->
+            HardwareWriteOp(label = "cpu$cpu-online", targetPath = "$root/cpu$cpu/online", value = if (on) "1" else "0", lockMode = null)
+        }
+
+    const val CPU_ROOT = "/sys/devices/system/cpu"
+
     fun buildGpuFrequencyOp(gpuMaxPath: String, targetHz: Long): HardwareWriteOp =
         buildWriteOp(label = "gpu-max-clock", path = gpuMaxPath, value = targetHz.toString())
 
@@ -291,5 +385,28 @@ object PerformanceCommandBuilder {
             else -> return null
         }
         return (effClockKHz.toFloat() / maxEff.toFloat()).coerceIn(MANUAL_MIN_RATIO, CPU_MAX_RATIO)
+    }
+}
+
+
+/**
+ * Bits da fixação de clocks (piso = teto). 0 = tudo livre (governador).
+ * Guardado assim no SharedPrefs (global) e no AppOverrideEntity.clockPinMask (por jogo).
+ */
+object ClockPin {
+    const val EFF = 1
+    const val PERF = 2
+    const val PRIME = 4
+    const val GPU = 8
+    const val NONE = 0
+
+    fun has(mask: Int, bit: Int): Boolean = mask and bit != 0
+    fun set(mask: Int, bit: Int, on: Boolean): Int = if (on) mask or bit else mask and bit.inv()
+
+    /** Bit do cluster a partir do rótulo de [PerformanceCommandBuilder.buildCpuFrequencyOps]. */
+    fun forCpuLabel(label: String): Int = when {
+        label.startsWith("cpu-prime") -> PRIME
+        label.startsWith("cpu-eff") -> EFF
+        else -> PERF
     }
 }

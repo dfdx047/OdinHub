@@ -499,10 +499,12 @@ class ThermalManager @Inject constructor(
         // -- senão o serviço térmico do fabricante deixava de o poder ajustar.
         val lock = if (restoring) HardwareWriteOp.DEFAULT_RESTORE_MODE else HardwareWriteOp.LOCKED_MODE
         val op = HardwareWriteOp(label = path.substringAfterLast('/'), targetPath = path, value = value, lockMode = lock)
-        executor.executeAsRoot(op.asChainedCommand())
-        if (readNodeAsRoot(path) == value) return true
-        op.asSequentialCommands().forEach { executor.executeAsRoot(it) }
-        return readNodeAsRoot(path) == value
+        // Um comando simples por chamada ao PServer (nunca `a && b`); repete uma vez se não pegou.
+        repeat(2) {
+            op.asSequentialCommands().forEach { executor.executeAsRoot(it) }
+            if (readNodeAsRoot(path) == value) return true
+        }
+        return false
     }
 
     // ------------------------------------------------------------------ leitura

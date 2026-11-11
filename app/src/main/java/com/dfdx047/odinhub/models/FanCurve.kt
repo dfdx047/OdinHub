@@ -13,6 +13,13 @@ enum class FanReference(val id: String, val labelEn: String, val labelPt: String
 
     fun label(isEn: Boolean) = if (isEn) labelEn else labelPt
 
+    /** Temperatura que comanda a curva; sem o sensor pedido usa o outro. `null` = sem leitura. */
+    fun pick(cpuC: Float?, gpuC: Float?): Float? = when (this) {
+        CPU -> cpuC ?: gpuC
+        GPU -> gpuC ?: cpuC
+        MAX -> listOfNotNull(cpuC, gpuC).maxOrNull()
+    }
+
     companion object {
         fun fromId(id: String?) = entries.firstOrNull { it.id == id } ?: CPU
     }
@@ -147,5 +154,55 @@ data class FanCurveConfig(
             (if (unit == FanSpeedUnit.NANOSECONDS) value * 100 / NS_FULL_SCALE else value).coerceIn(0, 100)
 
         fun cToF(c: Float): Float = c * 9f / 5f + 32f
+    }
+}
+
+/**
+ * Memória da curva entre ticks (histerese + trava de segurança), sem I/O -- o FanCurveController
+ * só lê os sensores e escreve o resultado. Não é thread-safe: um só chamador (o loop da curva).
+ *
+ * Regras:
+ *  - sem leitura de temperatura -> 100 %;
+ *  - o sensor MAIS QUENTE (CPU ou GPU, seja qual for a referência da curva) a [FanCurveConfig.CRITICAL_C]
+ *    ou mais -> 100 %, e assim fica até arrefecer [FanCurveConfig.hysteresisC] graus abaixo disso.
+ *    Antes só se olhava para a referência: com a curva pela CPU, uma GPU a 95 °C não contava;
+ *  - curva nova (o utilizador guardou outra) -> a histerese recomeça. Antes, baixar a curva com a
+ *    temperatura estável deixava a ventoinha presa na velocidade antiga (a histerese só deixa
+ *    descer depois de a temperatura cair), até a temperatura descer uns graus.
+ */
+class FanCurveTracker {
+    private var lastCfg: FanCurveConfig? = null
+    private var lastPercent: Int? = null
+    private var lastSetTempC: Float? = null
+    private var critical = false
+
+    fun reset() {
+        lastCfg = null
+        lastPercent = null
+        lastSetTempC = null
+        critical = false
+    }
+
+    fun next(cfg: FanCurveConfig, cpuC: Float?, gpuC: Float?): Int {
+        if (cfg != lastCfg) {
+            lastCfg = cfg
+            lastPercent = null
+            lastSetTempC = null
+        }
+        val temp = cfg.reference.pick(cpuC, gpuC) ?: return 100
+        val hottest = maxOf(temp, listOfNotNull(cpuC, gpuC).maxOrNull() ?: temp)
+        if (hottest >= FanCurveConfig.CRITICAL_C) {
+            critical = true
+        } else if (critical && hottest <= FanCurveConfig.CRITICAL_C - cfg.hysteresisC) {
+            // Arrefeceu: volta à curva sem âncora (a trava já fez de histerese).
+            critical = false
+            lastPercent = null
+            lastSetTempC = null
+        }
+        if (critical) return 100
+        val (percent, setTemp) = cfg.nextPercent(temp, lastPercent, lastSetTempC)
+        lastPercent = percent
+        lastSetTempC = setTemp
+        return percent
     }
 }

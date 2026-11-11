@@ -23,9 +23,6 @@
 
         Cada componente exportado abaixo tem de o ser, e está protegido:
           * .main.MainActivity            — exportada por ser a atividade de arranque (LAUNCHER).
-          * .tiles.ControllerTileService  — exportada porque é o SystemUI que a liga; protegida
-          * .tiles.L2R2TileService          com android:permission="BIND_QUICK_SETTINGS_TILE",
-                                            que só o sistema possui.
           * .service.ForegroundAppWatcherService — exportada porque é o sistema que a liga;
                                             protegida com "BIND_ACCESSIBILITY_SERVICE".
           * .tools.BootReceiver           — tem de ser exportado para receber BOOT_COMPLETED e
@@ -68,35 +65,6 @@
             </intent-filter>
         </activity>
 
-        <service
-            android:name=".tiles.ControllerTileService"
-            android:exported="true"
-            android:icon="@drawable/ic_face_buttons"
-            android:label="@string/controllerStyle"
-            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
-            <intent-filter>
-                <action android:name="android.service.quicksettings.action.QS_TILE" />
-            </intent-filter>
-
-            <meta-data
-                android:name="android.service.quicksettings.TOGGLEABLE_TILE"
-                android:value="true" />
-        </service>
-
-        <service
-            android:name=".tiles.L2R2TileService"
-            android:exported="true"
-            android:icon="@drawable/ic_sliders"
-            android:label="@string/l2r2mode"
-            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
-            <intent-filter>
-                <action android:name="android.service.quicksettings.action.QS_TILE" />
-            </intent-filter>
-
-            <meta-data
-                android:name="android.service.quicksettings.TOGGLEABLE_TILE"
-                android:value="true" />
-        </service>
 
         <!-- HUD DE DESEMPENHO -->
         <service

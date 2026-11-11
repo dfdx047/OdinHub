@@ -33,7 +33,8 @@ import javax.inject.Singleton
  *
  * Quase tudo é leitura direta de sysfs/proc (sem root, barato): temperaturas das zonas térmicas,
  * frequência de cada núcleo e da GPU, ocupação da GPU, RAM e bateria. Só duas métricas precisam
- * do PServer, e vão as duas numa ÚNICA transação por segundo:
+ * do PServer, cada uma numa transação por segundo. O PServer só devolve a PRIMEIRA linha da saída,
+ * por isso as leituras de várias linhas (`--list`, `--latency`, `grep -H`) passam por [RootLines]:
  *  - FPS / frame time / 1% low: os tempos REAIS de apresentação dos frames da camada do jogo
  *    (`dumpsys SurfaceFlinger --latency <camada>`), que funciona no Android 13, 14 e 15. O antigo
  *    contador `service call SurfaceFlinger 1013` foi desativado no Android 14+ (o Odin 3 está no
@@ -46,6 +47,7 @@ class HudSampler @Inject constructor(
     private val executor: ShellExecutor,
     private val performanceManager: PerformanceManager,
     private val foregroundTracker: ForegroundAppTracker,
+    private val rootLines: com.dfdx047.odinhub.tools.RootLines,
 ) {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var job: Job? = null
@@ -160,7 +162,8 @@ class HudSampler @Inject constructor(
                 layer != null -> "dumpsys SurfaceFlinger --latency ${shellQuote(layer)}"
                 else -> "service call SurfaceFlinger 1013"
             }
-            val fpsPart = fpsCmd?.let { executor.executeAsRoot(it).getOrNull() }.orEmpty()
+            // `--latency` tem ~128 linhas: pelo RootLines. O `service call` cabe numa linha.
+            val fpsPart = fpsCmd?.let { if (layer != null) rootLines.run(it) else executor.executeAsRoot(it).getOrNull() }.orEmpty()
 
             if (wantFps && layer != null) {
                 val before = fpsTracker.newest
@@ -191,26 +194,35 @@ class HudSampler @Inject constructor(
                 if (flips != null && previous != null) fps = HudMath.fps(previous, flips, now - lastFlipsAt)
                 lastFlips = flips
                 lastFlipsAt = now
-                frametime = fps?.takeIf { it >= 1f }?.let { 1000f / it }
+                frametime = fps?.takeIf { it > 0f }?.let { 1000f / it }
             }
         }
 
-        if (frametime != null) {
+        // Gráfico: o tempo de CADA frame (como o MangoHud), não a média do segundo. Sem camada do
+        // jogo (contador do ecrã) só há a média, e é essa que entra.
+        val frameTimes = if (fps != null && layerCandidates.isNotEmpty()) fpsTracker.recentFrameTimesMs(HISTORY) else emptyList()
+        if (frameTimes.isNotEmpty()) {
+            history.clear()
+            history.addAll(frameTimes)
+        } else if (frametime != null) {
             history.addLast(frametime)
             while (history.size > HISTORY) history.removeFirst()
         }
 
         val ram = if (cfg.has(HudMetric.RAM)) HudMath.parseMeminfo(readText("/proc/meminfo")) else null
         val battery = "/sys/class/power_supply/battery"
+        val usb = "/sys/class/power_supply/usb"
         val status = readText("$battery/status")?.lowercase()
         // Sysfs da bateria bloqueado para apps (AYN Thor): cai para a API do Android.
         val api by lazy { BatteryReader.read(context) }
-        val power = if (cfg.has(HudMetric.POWER)) {
-            val c = readLong("$battery/current_now")
-            val v = readLong("$battery/voltage_now")
-            if (c != null && v != null) AutoTdpController.batteryWatts(c, v) else api.watts
-        } else null
-        val charging = if (status != null) status == "charging" || status == "full" else api.externallyPowered == true
+        // A entrada USB diz se há carregador mesmo com o bypass ("Not charging").
+        val usbPower = if (cfg.has(HudMetric.POWER) || status == "not charging") HudMath.systemPower(
+            readLong("$battery/current_now"), readLong("$battery/voltage_now"),
+            readLong("$usb/input_current_now"), readLong("$usb/voltage_now"),
+        ) else null
+        val power = if (cfg.has(HudMetric.POWER)) usbPower?.first ?: api.watts else null
+        val charging = usbPower?.second == true ||
+            (if (status != null) status == "charging" || status == "full" else api.externallyPowered == true)
 
         return HudSnapshot(
             fps = fps,
@@ -241,7 +253,7 @@ class HudSampler @Inject constructor(
         staleTicks = 0
         fpsTracker.clear()
         layerCandidates = if (pkg == null) emptyList()
-        else HudMath.layerCandidates(executor.executeAsRoot("dumpsys SurfaceFlinger --list").getOrNull(), pkg).take(4)
+        else HudMath.layerCandidates(rootLines.run("dumpsys SurfaceFlinger --list"), pkg).take(4)
     }
 
     private fun gpuLoad(): Int? =
@@ -269,7 +281,7 @@ class HudSampler @Inject constructor(
         val values = list.filter { it.direct }.mapNotNull { HudMath.parseTempC(readText(it.tempPath)) }.toMutableList()
         val viaRoot = list.filterNot { it.direct }.take(MAX_ROOT_ZONES)
         if (viaRoot.isNotEmpty() && executor.outputCaptureWorks) {
-            val out = executor.executeAsRoot("grep -H . " + viaRoot.joinToString(" ") { it.tempPath }).getOrNull()
+            val out = rootLines.run("grep -H . " + viaRoot.joinToString(" ") { it.tempPath })
             values += HudMath.parseGrepH(out).values.mapNotNull { HudMath.parseTempC(it) }
         }
         return values.filter { it in 1f..150f }.maxOrNull()
@@ -278,7 +290,7 @@ class HudSampler @Inject constructor(
     private fun zoneDirs(): List<String> {
         val local = File(THERMAL).list()?.filter { it.startsWith("thermal_zone") }
         val names = if (!local.isNullOrEmpty()) local
-        else executor.executeAsRoot("ls $THERMAL").getOrNull().orEmpty().split(Regex("\\s+")).filter { it.startsWith("thermal_zone") }
+        else rootLines.run("ls $THERMAL").orEmpty().split(Regex("\\s+")).filter { it.startsWith("thermal_zone") }
         return names.sortedBy { it.removePrefix("thermal_zone").toIntOrNull() ?: Int.MAX_VALUE }
     }
 
@@ -288,7 +300,7 @@ class HudSampler @Inject constructor(
         // Tipos ilegíveis sem root: pede-os todos de uma vez ao PServer.
         val missing = names.filter { localTypes[it] == null }
         val rootTypes = if (missing.isNotEmpty() && executor.outputCaptureWorks) {
-            HudMath.parseGrepH(executor.executeAsRoot("grep -H . " + missing.joinToString(" ") { "$THERMAL/$it/type" }).getOrNull())
+            HudMath.parseGrepH(rootLines.run("grep -H . " + missing.joinToString(" ") { "$THERMAL/$it/type" }))
         } else emptyMap()
         return names.map { name ->
             val type = localTypes[name] ?: rootTypes["$THERMAL/$name/type"]
@@ -309,9 +321,9 @@ class HudSampler @Inject constructor(
         val names = zoneDirs()
         sb.appendLine("Zonas térmicas: ${names.size}")
         val rootTypes = if (executor.outputCaptureWorks && names.isNotEmpty())
-            HudMath.parseGrepH(executor.executeAsRoot("grep -H . " + names.joinToString(" ") { "$THERMAL/$it/type" }).getOrNull()) else emptyMap()
+            HudMath.parseGrepH(rootLines.run("grep -H . " + names.joinToString(" ") { "$THERMAL/$it/type" })) else emptyMap()
         val rootTemps = if (executor.outputCaptureWorks && names.isNotEmpty())
-            HudMath.parseGrepH(executor.executeAsRoot("grep -H . " + names.joinToString(" ") { "$THERMAL/$it/temp" }).getOrNull()) else emptyMap()
+            HudMath.parseGrepH(rootLines.run("grep -H . " + names.joinToString(" ") { "$THERMAL/$it/temp" })) else emptyMap()
         sb.appendLine()
         sb.appendLine("zona | tipo | direto | root | uso")
         for (name in names) {
@@ -339,7 +351,7 @@ class HudSampler @Inject constructor(
             "/sys/class/kgsl/kgsl-3d0/gpuclk",
             "/sys/kernel/ged/hal/gpu_utilization",
         )
-        val rootOthers = if (executor.outputCaptureWorks) HudMath.parseGrepH(executor.executeAsRoot("grep -H . " + others.joinToString(" ")).getOrNull()) else emptyMap()
+        val rootOthers = if (executor.outputCaptureWorks) HudMath.parseGrepH(rootLines.run("grep -H . " + others.joinToString(" "))) else emptyMap()
         for (path in others) sb.appendLine("${path.substringAfterLast("/sys/")} | ${readText(path) ?: "negado"} | ${rootOthers[path] ?: "-"}")
         val api = BatteryReader.read(context)
         sb.appendLine("API do Android: bateria ${api.percent ?: "?"}% · ${api.watts?.let { "%.2f W".format(java.util.Locale.US, it) } ?: "? W"} · ${api.tempC ?: "?"}°C · externa=${api.externallyPowered}")
@@ -370,13 +382,19 @@ class HudSampler @Inject constructor(
 
     private companion object {
         const val INTERVAL_MS = 1_000L
-        const val HISTORY = 60
+        /** Pontos do gráfico de frame time (frames individuais quando há camada do jogo). */
+        const val HISTORY = 120
         const val CPUFREQ = "/sys/devices/system/cpu/cpufreq"
         val PACKAGE = Regex("[A-Za-z0-9_.]+")
 
         /** Zonas de CPU (Qualcomm: cpu-*, cpuss-*; MediaTek: mtktscpu, cpu_big/little, soc_max). */
         const val THERMAL = "/sys/class/thermal"
-        /** Limite de zonas lidas por root em cada segundo (o comando não deve crescer sem fim). */
-        const val MAX_ROOT_ZONES = 16
+        /**
+         * Limite de zonas lidas por root em cada segundo (o comando não deve crescer sem fim). O
+         * Odin 3 tem 20 zonas de CPU (cpu-0-*, cpuss-0-*, cpu-1-*, cpuss-1-*): com 16 as do núcleo
+         * Prime 7 (cpu-1-1-*) e cpuss-1-* ficavam de fora -- e são as que a curva da ventoinha e
+         * a regra dos 90 °C mais precisam.
+         */
+        const val MAX_ROOT_ZONES = 24
     }
 }

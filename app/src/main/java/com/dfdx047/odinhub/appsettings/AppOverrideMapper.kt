@@ -78,6 +78,11 @@ class AppOverrideMapper @Inject constructor(
         if (app.displayOverride) parts += if (isEn) "Color" else "Cor"
         val macros = listOfNotNull(app.m1Macro?.let { "M1" }, app.m2Macro?.let { "M2" })
         if (macros.isNotEmpty()) parts += macros.joinToString("/")
+        app.offlineCpuMask?.let { mask ->
+            val off = Integer.bitCount(mask)
+            parts += if (off == 0) (if (isEn) "All cores" else "Todos os núcleos") else (if (isEn) "$off cores off" else "$off núcleos desligados")
+        }
+        app.clockPinMask?.takeIf { it != 0 }?.let { parts += if (isEn) "Pinned clocks" else "Clocks fixos" }
         return parts.joinToString(" | ").ifEmpty { if (isEn) "Follows global" else "Segue o global" }
     }
 }

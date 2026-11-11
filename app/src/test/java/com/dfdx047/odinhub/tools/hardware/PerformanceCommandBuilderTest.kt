@@ -105,12 +105,6 @@ class PerformanceCommandBuilderTest {
         assertEquals("chmod 666 /sys/class/kgsl/kgsl-3d0/max_gpuclk", op.unlockCommand)
         assertEquals("echo 750000000 > /sys/class/kgsl/kgsl-3d0/max_gpuclk", op.writeCommand)
         assertEquals("chmod 444 /sys/class/kgsl/kgsl-3d0/max_gpuclk", op.lockCommand)
-        assertEquals(
-            "chmod 666 /sys/class/kgsl/kgsl-3d0/max_gpuclk && " +
-                "echo 750000000 > /sys/class/kgsl/kgsl-3d0/max_gpuclk && " +
-                "chmod 444 /sys/class/kgsl/kgsl-3d0/max_gpuclk",
-            op.asChainedCommand(),
-        )
         assertEquals(listOf(op.unlockCommand, op.writeCommand, op.lockCommand), op.asSequentialCommands())
     }
 

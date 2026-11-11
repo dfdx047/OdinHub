@@ -2,11 +2,63 @@
 
 Each version is listed in English, then in Portuguese. `scripts/release.sh` publishes the section of the version being released as the GitHub release notes.
 
-Cada versão aparece em inglês e depois em português. O `scripts/release.sh` publica a secção da versão que está a ser lançada como notas da release no GitHub.
+Cada versão aparece em inglês e depois em português. O `scripts/release.sh` publica a seção da versão que está sendo lançada como notas da release no GitHub.
+
+## v0.14 — Odin 3 edition
+
+> **Odin 3 only.** From this version on, Odin Hub supports the AYN Odin 3 only. If you use it on an Odin 2, Thor or Retroid Pocket, stay on v0.13 and skip this update. On the Odin 3 it installs over v0.11, v0.12 or v0.13 and keeps your settings and per-game rules.
+
+### New
+
+- **Made for the AYN Odin 3.** Clock tables, GPU control, thermal zones and TDP profiles are tuned for its Snapdragon 8 Elite (6 + 2 Oryon cores, Adreno 830, up to 1100 MHz) and were tested on the device. TDP profiles: Power Save 7 W, Balanced 10 W, Triple A 15 W, slider up to 25 W.
+- **CPU cores on/off,** globally and per game (Performance > **CPU cores**, the overlay's **Cores** tab and per-game rules). The cards show which cores are really online. CPU0 never turns off, and every core comes back online in Stock, when you leave the game and at boot.
+- **Clock pinning:** pin each cluster or the GPU at its cap (floor = cap) for steady frame pacing.
+- **Save as global profile:** one button in the overlay and in per-game rules copies the current settings to the global profile. **Use global** drops the game's own rule.
+- **HUD controls in the overlay** (new **HUD** tab): turn it on or off, presets (FPS only, Essential, Standard, Full), each metric, layout, style, position, size and background. Changes show up live.
+- **Smoother HUD:** real FPS from SurfaceFlinger, frame-time graph, smooth dragging, pinch or corner resize, new styles.
+- **New themes,** in groups (Odin signature, Vibrant, Retro, System) with a visual picker.
+- **New icon and boot animation.**
+
+### Fixes
+
+- Firmware CPU floors (perf HAL, `msm_performance`) are read from the Odin 3's own path, so the app can explain why a cap won't go lower.
+- Root commands run one simple command per call, and multi-step actions (such as installing an update) run as a small script. This is more reliable with PServerBinder.
+- **TDP:** a small change of the target (for example 10 to 11.4 W, or a slow drag of the slider) now moves the CPU and GPU caps right away, also while charging, when AutoTDP is paused.
+- **Custom fan curve:**
+  - Saving a lower curve now slows the fan down right away (it used to stay at the old speed while the temperature was steady).
+  - The 90 °C safety rule now looks at the hottest sensor, CPU or GPU, not only the one the curve follows.
+  - A failed temperature reading now counts as "no reading" and runs the fan at 100 %, instead of keeping the previous speed.
+  - Switching from Custom to another mode no longer leaves the fan stuck at a fixed speed.
+  - **Stock** in the in-game overlay now follows the global fan mode, so a global custom curve is no longer switched off inside the game.
+  - The curve editor no longer hides the bottom of the graph behind the gesture bar, and the line before the first point now shows the real speed (the fan stays at that point's speed, it doesn't stop).
+- The HUD can read all 20 CPU temperature sensors of the Odin 3 through PServerBinder (it stopped at 16).
+
+### Português
+
+> **Só para o Odin 3.** A partir desta versão o Odin Hub suporta apenas o AYN Odin 3. Se você usa num Odin 2, Thor ou Retroid Pocket, continue na v0.13 e não instale esta atualização. No Odin 3 ela instala por cima da v0.11, v0.12 ou v0.13 e mantém suas configurações e regras por jogo.
+
+- **Feito para o AYN Odin 3.** Tabelas de clock, controle da GPU, zonas térmicas e perfis de TDP ajustados ao Snapdragon 8 Elite (6 + 2 núcleos Oryon, Adreno 830, até 1100 MHz) e testados no aparelho. Perfis de TDP: Economia 7 W, Equilibrado 10 W, Triple A 15 W, slider até 25 W.
+- **Ligar e desligar núcleos da CPU,** no global e por jogo (Desempenho > **Núcleos da CPU**, aba **Núcleos** do overlay e regras por jogo). Os cartões mostram quais núcleos estão realmente ligados. O CPU0 nunca desliga, e todos voltam a ligar no Stock, quando você sai do jogo e ao ligar o aparelho.
+- **Fixar clocks:** fixa cada cluster ou a GPU no teto (piso = teto), para um frame pacing estável.
+- **Salvar como perfil global:** um botão no overlay e nas regras por jogo copia os ajustes atuais para o perfil global. **Usar o global** apaga a regra própria do jogo.
+- **Controles do HUD no overlay** (nova aba **HUD**): ligar e desligar, predefinições (Só FPS, Essencial, Padrão, Completo), cada métrica, layout, estilo, posição, tamanho e fundo, tudo em tempo real.
+- **HUD mais fluido:** FPS real do SurfaceFlinger, gráfico de frame time, arrastar suave, redimensionar com pinça ou pelo canto, estilos novos.
+- **Temas novos,** em grupos (Assinatura Odin, Vibrantes, Retrô, Sistema), com seletor visual.
+- **Ícone e animação de abertura novos.**
+- Correções: os pisos de CPU do firmware (perf HAL, `msm_performance`) são lidos no caminho do Odin 3, então o app consegue explicar por que um limite não desce mais. Os comandos root rodam um de cada vez, e as ações com vários passos (como instalar uma atualização) rodam como um pequeno script, o que é mais confiável com o PServerBinder.
+- **TDP:** uma mudança pequena do alvo (por exemplo de 10 para 11,4 W, ou arrastar o slider devagar) agora move os limites de CPU e GPU na hora, também carregando, quando o AutoTDP fica em pausa.
+- **Curva da ventoinha personalizada:**
+  - Salvar uma curva mais baixa agora desacelera a ventoinha na hora (antes ela ficava na velocidade antiga enquanto a temperatura não mudava).
+  - A regra de segurança dos 90 °C agora olha o sensor mais quente, CPU ou GPU, e não só o que a curva segue.
+  - Uma leitura de temperatura que falha agora conta como "sem leitura" e põe a ventoinha a 100 %, em vez de manter a velocidade anterior.
+  - Trocar do Custom para outro modo não deixa mais a ventoinha presa numa velocidade fixa.
+  - O **Stock** no overlay dentro do jogo agora segue o modo global da ventoinha, então uma curva personalizada global não é mais desligada no jogo.
+  - O editor da curva não esconde mais a parte de baixo do gráfico atrás da barra de gestos, e a linha antes do primeiro ponto agora mostra a velocidade real (a ventoinha fica na velocidade desse ponto, não para).
+- O HUD consegue ler pelo PServerBinder os 20 sensores de temperatura da CPU do Odin 3 (parava em 16).
 
 ## v0.13 — Custom fan curve
 
-### ✨ New
+### New
 
 - **Custom fan curve,** in the spirit of AYN's own fan screen (Performance › Fan Control › **Custom fan curve › Edit**):
   - Drag the points on the graph, or tap one and fine-tune it with − / + (it works with the D-pad).
@@ -18,13 +70,13 @@ Cada versão aparece em inglês e depois em português. O `scripts/release.sh` p
   - Saving turns on the new **Custom** fan mode. It's also available in the side overlay and in per-game rules.
 - Odin Hub drives the fan through the firmware's manual-speed mode. If the fan doesn't respond on your device, the editor's **Advanced** section lets you pick another firmware mode or speed unit, with a **Test** button (100 % for 5 s) to check.
 
-### 🛠️ Fixes
+### Fixes
 
 - **AYN Thor: battery, power draw and GPU load in the HUD** (they showed `--`). This firmware doesn't let apps read the battery and GPU-load nodes. Battery %, power draw and battery temperature now come from Android's own battery API, and GPU load is read through PServerBinder.
 - **AutoTDP on the Thor:** it had no power reading for the same reason, so it couldn't settle on the target. It now uses the same fallback.
 - **Sensor diagnostics** also lists the battery and GPU nodes (read directly, read with root, and the Android API value).
 
-### 🇧🇷 Português
+### Português
 
 - **Curva da ventoinha personalizada,** no estilo do ecrã de ventoinha da AYN (Desempenho › Controle de Ventoinha › **Curva da ventoinha personalizada › Editar**):
   - Arraste os pontos no gráfico, ou toque num e afine com − / + (funciona com o D-pad).
@@ -41,21 +93,21 @@ Cada versão aparece em inglês e depois em português. O `scripts/release.sh` p
 
 ## v0.12
 
-### 🛠️ Fixes
+### Fixes
 
 - **Missing CPU / GPU temperatures in the HUD (Thor, Retroid and other 8 Gen 2 devices):** on some firmwares the system doesn't let apps read the temperature sensors directly, and Odin Hub used to skip them. Those sensors are now read through PServerBinder, all in a single call per second. Sensor names from more kernels are also recognized.
 - **New: Sensor diagnostics** in the Performance HUD card. It lists every temperature sensor on the device, with its type, whether it can be read directly or only with root, and which ones the HUD uses. **Copy** and **Share** buttons make it easy to send in a bug report.
 
-### 🇧🇷 Português
+### Português
 
 - **Temperaturas da CPU / GPU faltando no HUD (Thor, Retroid e outros 8 Gen 2):** em alguns firmwares o sistema não deixa os apps lerem os sensores de temperatura diretamente, e o Odin Hub os ignorava. Agora esses sensores são lidos pelo PServerBinder, todos numa única chamada por segundo. Também são reconhecidos os nomes de sensores de mais kernels.
 - **Novo: Diagnóstico dos sensores** no cartão do HUD de Desempenho. Lista todos os sensores de temperatura do aparelho, com o tipo, se dá para ler direto ou só com root, e quais o HUD usa. Os botões **Copiar** e **Partilhar** facilitam enviar num relato de bug.
 
 ## v0.11
 
-> ⚠️ **Reinstall once.** Releases are now built and signed on the developer's machine, always with the same key, so from now on updates install over the previous version, straight from the app. Older releases were signed with a different key by GitHub, so uninstall your current Odin Hub once and install this APK.
+> **Reinstall once.** Releases are now built and signed on the developer's machine, always with the same key, so from now on updates install over the previous version, straight from the app. Older releases were signed with a different key by GitHub, so uninstall your current Odin Hub once and install this APK.
 
-### 🛠️ Fixes
+### Fixes
 
 - **Updates install over the old version.** Every release is signed with the same key from now on.
 - **Update notification:** Odin Hub checks for new versions in the background every few hours and shows a notification. Tapping it opens the update pop-up.
@@ -65,9 +117,9 @@ Cada versão aparece em inglês e depois em português. O `scripts/release.sh` p
 - **Screen recording from the Home button** now starts. It records the whole screen without audio and needs no app-picker dialog. Files go to `Movies/OdinHub`.
 - **Double tap:** the time allowed between taps is adjustable (300 / 450 / 600 / 800 ms) in the Home Button Gestures card, and the default is a little longer than before.
 
-### 🇧🇷 Português
+### Português
 
-> ⚠️ **Reinstale uma vez.** As releases passam a ser compiladas e assinadas no computador do desenvolvedor, sempre com a mesma chave, então a partir de agora as atualizações instalam por cima da versão anterior, direto pelo app. As versões antigas foram assinadas pelo GitHub com outra chave, por isso desinstale o Odin Hub atual uma vez e instale este APK.
+> **Reinstale uma vez.** As releases passam a ser compiladas e assinadas no computador do desenvolvedor, sempre com a mesma chave, então a partir de agora as atualizações instalam por cima da versão anterior, direto pelo app. As versões antigas foram assinadas pelo GitHub com outra chave, por isso desinstale o Odin Hub atual uma vez e instale este APK.
 
 - **As atualizações instalam por cima da versão antiga.** Todas as releases passam a ter a mesma assinatura.
 - **Notificação de atualização:** o Odin Hub procura versões novas em segundo plano a cada poucas horas e mostra uma notificação. Tocar nela abre o pop-up de atualização.
@@ -79,13 +131,13 @@ Cada versão aparece em inglês e depois em português. O `scripts/release.sh` p
 
 ## v0.10
 
-### 🛠️ Fixes
+### Fixes
 
 - **Glass on the tab bar:** the side tab bar (PERF / DISP / CTRL / SYS) uses the Glass material too, and the active tab gets a translucent pill.
 - **Prime frequencies on the Odin 3:** the clock chips always include the three highest steps, so 4204 MHz is back between 4089 and 4320 MHz. The same applies to every cluster and device.
 - **CPU load in the HUD** was showing `--%` on some setups.
 
-### 🇧🇷 Português
+### Português
 
 - **Vidro na barra de abas:** a barra lateral (PERF / DISP / CTRL / SYS) também usa o vidro, e a aba ativa ganha uma pílula translúcida.
 - **Frequências do Prime no Odin 3:** os chips de clock incluem sempre os três degraus mais altos, então o 4204 MHz voltou entre 4089 e 4320 MHz. Vale para todos os clusters e aparelhos.
@@ -93,7 +145,7 @@ Cada versão aparece em inglês e depois em português. O `scripts/release.sh` p
 
 ## v0.9 — Performance HUD, Glass & Auto-update
 
-### ✨ New
+### New
 
 - **Performance HUD:** a MangoHud-style overlay over any app. It shows FPS and 1% low, frame time with a graph, CPU and GPU load, temperature and clocks (per cluster or per core), RAM, power draw, battery and the time. Every metric is optional, and you can pick a horizontal or vertical layout. It follows the app theme. Double-tap the HUD to hide it.
 - **Glass appearance:** a Liquid Glass–style mode on top of every theme.
@@ -101,14 +153,14 @@ Cada versão aparece em inglês e depois em português. O `scripts/release.sh` p
 - **TDP profiles per chip,** with steps far enough apart to feel different (Odin 3: 7 / 10 / 15 W, up to 25 W).
 - **Efficiency cluster:** on the 8 Gen 2 and 865 it gets its own clock row.
 
-### 🛠️ Fixes
+### Fixes
 
 - Missing top ("boost") CPU frequencies.
 - Home button gestures (the firmware's "prevent accidental Home press" was swallowing the first press).
 - First-launch screens scroll in landscape.
 - The GitHub / "Check for updates" buttons no longer lead to a 404 page.
 
-### 🇧🇷 Português
+### Português
 
 - **HUD de desempenho:** sobreposição estilo MangoHud por cima de qualquer app. Mostra FPS e 1% low, frame time com gráfico, uso, temperatura e clocks da CPU e da GPU (por cluster ou por núcleo), RAM, consumo, bateria e hora. Cada métrica é opcional, e o layout pode ser horizontal ou vertical. Segue o tema do app. Dois toques no HUD o escondem.
 - **Aparência de vidro:** um modo estilo Liquid Glass por cima de qualquer tema.
@@ -120,4 +172,4 @@ Cada versão aparece em inglês e depois em português. O `scripts/release.sh` p
 ## v0.8
 
 - Multi-device support (Odin 2 family, Thor, Retroid Pocket 4 / 5 / 6 / Mini / Nova) with automatic detection, AutoTDP v2 and a general code review.
-- 🇧🇷 Suporte a vários aparelhos (família Odin 2, Thor, Retroid Pocket 4 / 5 / 6 / Mini / Nova) com detecção automática, AutoTDP v2 e uma revisão geral do código.
+- Suporte a vários aparelhos (família Odin 2, Thor, Retroid Pocket 4 / 5 / 6 / Mini / Nova) com detecção automática, AutoTDP v2 e uma revisão geral do código.

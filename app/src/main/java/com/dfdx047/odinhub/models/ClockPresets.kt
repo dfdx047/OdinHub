@@ -14,13 +14,7 @@ object ClusterClockPresets {
 
     val SM8750: ClockTables get() = SocTables.SM8750
 
-    /** 8 Gen 2 / QCS8550 (Odin 2, Thor, RP6, RP Nova). */
-    val SM8550: ClockTables get() = SocTables.KALAMA
-
-    /** 865 / SM8250 (RP5, RP Mini, Thor Lite). */
-    val SM8250: ClockTables get() = SocTables.KONA
-
-    /** Tabela de reserva pelo SoC (`Build.SOC_MODEL` / `Build.HARDWARE`). Desconhecido -> 8 Elite. */
+    /** Tabela de reserva pelo SoC (`Build.SOC_MODEL` / `Build.HARDWARE`). Sempre o 8 Elite (Odin 3). */
     fun fallbackFor(socModel: String?, hardware: String?): ClockTables =
         SocTables.forSoc(
             DeviceProfiles.socFrom(DeviceIdentity(socModel = socModel.orEmpty(), hardware = hardware.orEmpty(), platform = hardware.orEmpty())),

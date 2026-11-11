@@ -103,4 +103,23 @@ class AutoTdpControllerTest {
         assertNull(AutoTdpController.parseGpuBusy(""))
         assertNull(AutoTdpController.parseGpuBusy("0 0"))
     }
+    @Test
+    fun `em pausa o alvo novo move os tetos pela proporcao do ponto de partida`() {
+        // 10 -> 11 W (< 15 %, não recomeça o loop) a carregar: antes os tetos ficavam nos dos 10 W.
+        val learned = AutoTdpState(cpuRatio = 0.70f, gpuRatio = 0.60f, filteredWatts = 9.8f, integral = 1.2f)
+        val moved = AutoTdpController.retarget(learned, 10f, 11f, 25f, min)
+        val factor = AutoTdpController.feedForward(11f, 25f, min) / AutoTdpController.feedForward(10f, 25f, min)
+        assertEquals(0.70f * factor, moved.cpuRatio, 1e-4f)
+        assertEquals(0.60f * factor, moved.gpuRatio, 1e-4f)
+        assertTrue(moved.cpuRatio > learned.cpuRatio)
+        assertEquals(9.8f, moved.filteredWatts!!, 0f) // a medição filtrada fica
+        assertEquals(0f, moved.integral, 0f)
+        // Mesmo alvo: nada muda (a pausa continua a segurar os tetos onde estavam).
+        assertEquals(learned, AutoTdpController.retarget(learned, 10f, 10f, 25f, min))
+        // Nunca sai dos limites.
+        val top = AutoTdpController.retarget(AutoTdpState(0.95f, 0.95f), 10f, 25f, 25f, min)
+        assertEquals(1f, top.cpuRatio, 0f)
+        val bottom = AutoTdpController.retarget(AutoTdpState(min, min), 10f, 1f, 25f, min)
+        assertEquals(min, bottom.cpuRatio, 0f)
+    }
 }

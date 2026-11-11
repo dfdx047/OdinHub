@@ -92,4 +92,9 @@ class AppOverrideRepository @Inject constructor(
     suspend fun delete(packageName: String) = withContext(Dispatchers.IO) {
         dao.deleteByPackageName(packageName)
     }
+
+    /** Como [delete], no mesmo escritor em série do [upsertAsync] (não se perde se o painel fechar). */
+    fun deleteAsync(packageName: String) {
+        repositoryScope.launch(serialWriter) { dao.deleteByPackageName(packageName) }
+    }
 }

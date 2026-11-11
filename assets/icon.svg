@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="432" height="432" viewBox="0 0 108 108">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="108" y2="108" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#22222D"/><stop offset="1" stop-color="#08080C"/>
+    </linearGradient>
+    <linearGradient id="rune" x1="44" y1="38" x2="64" y2="70" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FF5A3C"/><stop offset="1" stop-color="#E5002B"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="54" cy="54" r="30" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#E5002B" stop-opacity="0.35"/><stop offset="1" stop-color="#E5002B" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="mask"><circle cx="54" cy="54" r="54"/></clipPath>
+  </defs>
+  <g>
+  <rect width="108" height="108" fill="url(#bg)"/>
+  <circle cx="54" cy="54" r="30" fill="url(#glow)"/>
+  <!-- hexágono (chip) -->
+  <path d="M54,30.5 L74.35,42.25 L74.35,65.75 L54,77.5 L33.65,65.75 L33.65,42.25 Z" fill="none" stroke="#F3F4F6" stroke-opacity="0.92" stroke-width="3.6" stroke-linejoin="round"/>
+  <!-- pinos do chip -->
+  <path d="M28.5,47 h-4 M28.5,54 h-4 M28.5,61 h-4 M79.5,47 h4 M79.5,54 h4 M79.5,61 h4" stroke="#F3F4F6" stroke-opacity="0.45" stroke-width="2.2" stroke-linecap="round"/>
+  <!-- runa Ansuz -->
+  <path d="M48.5,40.5 V67.5 M48.5,41.5 L60.5,52 M48.5,52 L60.5,62.5" fill="none" stroke="url(#rune)" stroke-width="5.4" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- três pontos: Odin 3 -->
+  <circle cx="47.5" cy="84" r="1.7" fill="#F3F4F6" fill-opacity="0.85"/>
+  <circle cx="54" cy="84" r="1.7" fill="#F3F4F6" fill-opacity="0.85"/>
+  <circle cx="60.5" cy="84" r="1.7" fill="#FF5A3C"/>
+  </g>
+</svg>

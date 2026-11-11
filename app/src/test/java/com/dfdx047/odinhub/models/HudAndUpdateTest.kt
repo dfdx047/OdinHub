@@ -85,9 +85,8 @@ class HudAndUpdateTest {
 
     @Test
     fun `tabelas de eficiencia por SoC`() {
-        assertEquals(2016, SocTables.KALAMA.effMHz.last())
-        assertEquals(1804, SocTables.KONA.effMHz.last())
+        // Odin 3 (8 Elite): só dois clusters, sem cluster de eficiência.
         assertTrue(SocTables.SM8750.effMHz.isEmpty())
-        assertTrue(SocTables.KALAMA.hasEfficiencyCluster)
+        assertFalse(SocTables.SM8750.hasEfficiencyCluster)
     }
 }

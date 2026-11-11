@@ -49,6 +49,7 @@ class BootReceiver : BroadcastReceiver() {
     @Inject lateinit var prefs: SharedPrefsRepo
     @Inject lateinit var displayManager: DisplayManager
     @Inject lateinit var thermalManager: ThermalManager
+    @Inject lateinit var performanceManager: com.dfdx047.odinhub.tools.hardware.PerformanceManager
 
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != Intent.ACTION_BOOT_COMPLETED && intent.action != Intent.ACTION_MY_PACKAGE_REPLACED) {
@@ -58,6 +59,12 @@ class BootReceiver : BroadcastReceiver() {
         val pendingResult = goAsync()
         CoroutineScope(Dispatchers.IO).launch {
             try {
+                // Núcleos: no arranque tudo ligado (regra do hotplug). Num reboot o kernel já os
+                // liga; numa atualização da app (MY_PACKAGE_REPLACED) o processo antigo pode ter
+                // morrido com núcleos desligados a meio de um jogo.
+                runCatching { performanceManager.bringAllCoresOnline() }
+                    .onFailure { Log.w(TAG, "Não foi possível ligar todos os núcleos no arranque", it) }
+
                 settings.applyRequiredSettings()
 
                 if (intent.action == Intent.ACTION_BOOT_COMPLETED) displayManager.onDeviceBoot()

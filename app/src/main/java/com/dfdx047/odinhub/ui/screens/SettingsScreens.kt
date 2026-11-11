@@ -431,7 +431,6 @@ private fun OverlayHandlePreview(
 @Composable
 fun OdinHubWelcomeScreen(theme: ConsoleTheme, isEn: Boolean, currentThemeIndex: Int, amoledBlack: Boolean, onThemeChange: (Int) -> Unit, onAmoledToggle: (Boolean) -> Unit, onLanguageChange: (String) -> Unit, onFinish: () -> Unit) {
     val haptic = LocalHapticFeedback.current
-    var expandedTheme by remember { mutableStateOf(false) }
     var expandedLang by remember { mutableStateOf(false) }
 
     // Com rolagem: na horizontal o ecrã é baixo e o botão INICIAR ficava fora do ecrã.
@@ -445,10 +444,8 @@ fun OdinHubWelcomeScreen(theme: ConsoleTheme, isEn: Boolean, currentThemeIndex: 
                 }
             }
 
-            ConsoleCard(if (isEn) "Theme" else "Tema", AvailableThemes.getOrElse(currentThemeIndex) { AvailableThemes[0] }.name, theme, playClick = { expandedTheme = true }) {
-                DropdownMenu(expanded = expandedTheme, onDismissRequest = { expandedTheme = false }, modifier = Modifier.background(theme.surface)) {
-                    AvailableThemes.forEachIndexed { index, consoleTheme -> DropdownMenuItem(text = { Text(consoleTheme.name, color = theme.text, fontFamily = theme.fontFamily) }, onClick = { onThemeChange(index); expandedTheme = false; haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove) }) }
-                }
+            ConsoleCard(if (isEn) "Theme" else "Tema", AvailableThemes.getOrElse(currentThemeIndex) { AvailableThemes[0] }.label(isEn), theme) {
+                ThemePicker(theme = theme, isEn = isEn, selectedIndex = currentThemeIndex, onSelect = { onThemeChange(it); haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove) })
             }
 
             ConsoleCard(if (isEn) "AMOLED Black" else "Preto AMOLED", if (isEn) "Absolute dark mode" else "Modo escuro absoluto", theme) {
@@ -555,6 +552,13 @@ fun PerformancePanel(uiState: MainUiModel, viewModel: MainViewModel, theme: Cons
     val haptic = LocalHapticFeedback.current
     val isTdpMode = uiState.activeLimitMode == "TDP"
     val isClockMode = uiState.activeLimitMode == "CLOCK"
+    // Estado real (núcleos e GPU) atualizado enquanto este painel está à vista.
+    LaunchedEffect(Unit) {
+        while (true) {
+            viewModel.refreshHardwareLive()
+            kotlinx.coroutines.delay(2_000)
+        }
+    }
 
     Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         DeviceInfoCard(device = uiState.device, tables = uiState.clockTables, theme = theme, isEn = isEn)
@@ -655,7 +659,40 @@ fun PerformancePanel(uiState: MainUiModel, viewModel: MainViewModel, theme: Cons
             isEn = isEn,
             onClocks = { perf, prime, gpu, eff -> haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove); viewModel.updateManualClocks(perf, prime, gpu, eff); playClick() },
             onSavePreset = { name, perf, prime, gpu, eff -> viewModel.saveCustomProfile(name, "CLOCK", 0f, perf, prime, gpu, eff) },
+            pinMask = uiState.clockPinMask,
+            clusterKinds = viewModel.cpuClusters.map { it.kind },
+            onPinChange = { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove); viewModel.updateClockPinMask(it); playClick() },
+            gpuLive = uiState.gpuLive,
+            stockGpuMaxMHz = uiState.device.stockGpuMaxMHz,
+            firmwareFloorsMHz = uiState.firmwareFloors,
         )
+
+        // Núcleos da CPU (hotplug): perfil global, com o estado REAL de cada núcleo.
+        ConsoleSectionHeader(if (isEn) "CPU Cores" else "Núcleos da CPU", theme)
+        ConsoleCard(
+            if (isEn) "Cores on / off" else "Núcleos ligados / desligados",
+            if (isEn) "Global profile -- each game can have its own in Per-App rules" else "Perfil global -- cada jogo pode ter o seu nas regras por app",
+            theme,
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                CoreToggleGrid(
+                    clusters = viewModel.cpuClusters,
+                    possible = viewModel.possibleCpus,
+                    mask = uiState.offlineCpuMask,
+                    realStates = uiState.coreStates,
+                    theme = theme,
+                    isEn = isEn,
+                ) { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove); viewModel.updateCoreMask(it); playClick() }
+                if (uiState.offlineCpuMask != 0) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        if (isEn) "Turn all on" else "Ligar todos",
+                        color = theme.primary, fontWeight = FontWeight.Bold, fontSize = 12.sp,
+                        modifier = Modifier.clickable { viewModel.resetCores(); playClick() }.padding(4.dp),
+                    )
+                }
+            }
+        }
 
         ConsoleSectionHeader(if (isEn) "Thermal" else "Térmico", theme)
         ThermalLimitCard(
@@ -845,6 +882,7 @@ fun ControlsPanel(uiState: MainUiModel, viewModel: MainViewModel, theme: Console
             MacroEntryRow("M2", uiState.m2MacroEnabled, uiState.m2MacroSteps.size, theme, isEn) { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove); playClick(); viewModel.openMacroEditor("m2") }
         }
         }
+
     }
 }
 
@@ -863,7 +901,6 @@ fun SystemPanel(
     val haptic = LocalHapticFeedback.current
     val context = LocalContext.current
     var expandedLang by rememberSaveable { mutableStateOf(false) }
-    var expandedTheme by rememberSaveable { mutableStateOf(false) }
     var expandedWallType by rememberSaveable { mutableStateOf(false) }
 
     // OpenDocument + permissão persistente: com GetContent o acesso ao ficheiro escolhido
@@ -987,10 +1024,8 @@ fun SystemPanel(
         }
 
         ConsoleSectionHeader(if (isEn) "UI Customization" else "Personalização UI", theme)
-        ConsoleCard(if (isEn) "Console Theme" else "Tema do Console", AvailableThemes.getOrElse(currentThemeIndex) { AvailableThemes[0] }.name, theme, playClick = { expandedTheme = true; playClick() }) {
-            DropdownMenu(expanded = expandedTheme, onDismissRequest = { expandedTheme = false }, modifier = Modifier.background(theme.surface)) {
-                AvailableThemes.forEachIndexed { index, consoleTheme -> DropdownMenuItem(text = { Text(consoleTheme.name, color = if (currentThemeIndex == index) theme.primary else theme.text, fontFamily = theme.fontFamily) }, onClick = { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove); onThemeChange(index); expandedTheme = false; playClick() }) }
-            }
+        ConsoleCard(if (isEn) "Theme" else "Tema", AvailableThemes.getOrElse(currentThemeIndex) { AvailableThemes[0] }.label(isEn), theme) {
+            ThemePicker(theme = theme, isEn = isEn, selectedIndex = currentThemeIndex, onSelect = { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove); onThemeChange(it); playClick() })
         }
         ConsoleCard(if (isEn) "AMOLED Black" else "Preto AMOLED", if (isEn) "Absolute dark background" else "Fundo escuro absoluto (Adaptativo)", theme, playClick = playClick) {
             Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {

@@ -12,6 +12,17 @@ import com.dfdx047.odinhub.R
 
 val ConsoleFont = FontFamily(Font(R.font.outfit_regular))
 
+/** Grupos do seletor de temas (a ordem aqui é a ordem no ecrã). */
+enum class ThemeGroup(val labelEn: String, val labelPt: String) {
+    ODIN("Odin signature", "Assinatura Odin"),
+    VIBRANT("Vibrant", "Vibrantes"),
+    RETRO("Retro", "Retrô"),
+    SYSTEM("System", "Sistema"),
+    ;
+
+    fun label(isEn: Boolean): String = if (isEn) labelEn else labelPt
+}
+
 data class ConsoleTheme(
     val name: String,
     val background: Color,
@@ -25,19 +36,95 @@ data class ConsoleTheme(
      * superfícies translúcidas com reflexo e contorno de luz. As cores de cada tema mantêm-se.
      */
     val glassMode: Boolean = false,
+    val group: ThemeGroup = ThemeGroup.VIBRANT,
+    /** Nome em português (o [name] é o inglês). */
+    val namePt: String = name,
+    /** Segunda cor de destaque, para as amostras do seletor e gradientes. */
+    val accent2: Color = primary,
+) {
+    fun label(isEn: Boolean): String = if (isEn) name else namePt
+}
+
+// ---- Assinatura Odin: grafite com o vermelho do logótipo, a versão clara e o roxo translúcido ----
+val OdinTheme = ConsoleTheme(
+    "Odin Ruby", Color(0xFF0E0E13), Color(0xFF1B1B23), Color(0xFFE5002B), Color(0xFFF3F4F6),
+    group = ThemeGroup.ODIN, namePt = "Odin Rubi", accent2 = Color(0xFFFF5A3C),
+)
+val OdinFrostTheme = ConsoleTheme(
+    "Odin Frost", Color(0xFFF1F3F7), Color(0xFFFFFFFF), Color(0xFFD1002A), Color(0xFF16161D),
+    group = ThemeGroup.ODIN, namePt = "Odin Ártico", accent2 = Color(0xFF3A3A48),
+)
+val OdinAuroraTheme = ConsoleTheme(
+    "Odin Aurora", Color(0xFF0F0B19), Color(0xFF1C152E), Color(0xFFA884FF), Color(0xFFEEE8FF),
+    group = ThemeGroup.ODIN, namePt = "Odin Aurora", accent2 = Color(0xFF5CE1E6),
+)
+val EliteEmberTheme = ConsoleTheme(
+    "Elite Ember", Color(0xFF120C0A), Color(0xFF231713), Color(0xFFFF6A2B), Color(0xFFFFF1EA),
+    group = ThemeGroup.ODIN, namePt = "Brasa Elite", accent2 = Color(0xFFFFC14D),
 )
 
-val DynamicTheme = ConsoleTheme("Dynamic", Color.Black, Color.DarkGray, Color.White, Color.White, isDynamic = true)
-val OdinTheme = ConsoleTheme("Odin OS", Color(0xFF0F0F13), Color(0xFF1C1C24), Color(0xFFE5002B), Color(0xFFF3F4F6))
-val LightTheme = ConsoleTheme("Light OS", Color(0xFFF0F3F8), Color(0xFFFFFFFF), Color(0xFF0055FF), Color(0xFF1A1A24)) // Novo Tema Claro
-val CyberpunkTheme = ConsoleTheme("Cyberpunk", Color(0xFF09090B), Color(0xFF13131A), Color(0xFFFCEE0A), Color(0xFF00FFD1))
-val SnesTheme = ConsoleTheme("SNES", Color(0xFFE5E6EA), Color(0xFFD0D3D9), Color(0xFF5A4D9C), Color(0xFF333333))
-val NesTheme = ConsoleTheme("NES", Color(0xFF3C3C3C), Color(0xFF000000), Color(0xFFE60012), Color(0xFFFFFFFF))
-val XboxTheme = ConsoleTheme("Xbox", Color(0xFF101010), Color(0xFF1A1A1A), Color(0xFF107C10), Color(0xFFFFFFFF))
-val SteamTheme = ConsoleTheme("Steam OS", Color(0xFF171A21), Color(0xFF2A475E), Color(0xFF66C0F4), Color(0xFFC7D5E0))
-val PlayStationTheme = ConsoleTheme("PlayStation", Color(0xFF000033), Color(0xFF003399), Color(0xFF0066CC), Color(0xFFFFFFFF))
+// ---- Vibrantes ----
+val NeonTheme = ConsoleTheme(
+    "Neon Grid", Color(0xFF09090C), Color(0xFF14141B), Color(0xFFFCEE0A), Color(0xFFE6FFFA),
+    group = ThemeGroup.VIBRANT, namePt = "Grade Neon", accent2 = Color(0xFF00FFD1),
+)
+val ArenaTheme = ConsoleTheme(
+    "Arena Green", Color(0xFF0D0F0D), Color(0xFF181C18), Color(0xFF2BD45A), Color(0xFFF2FFF4),
+    group = ThemeGroup.VIBRANT, namePt = "Verde Arena", accent2 = Color(0xFFB6FF5C),
+)
+val VaporTheme = ConsoleTheme(
+    "Vapor Blue", Color(0xFF151A22), Color(0xFF1F2B3A), Color(0xFF66C0F4), Color(0xFFD3DFEA),
+    group = ThemeGroup.VIBRANT, namePt = "Azul Vapor", accent2 = Color(0xFF9AD8FF),
+)
+val RoyalTheme = ConsoleTheme(
+    "Royal Blue", Color(0xFF05081E), Color(0xFF101A48), Color(0xFF2F7BFF), Color(0xFFFFFFFF),
+    group = ThemeGroup.VIBRANT, namePt = "Azul Real", accent2 = Color(0xFF7FB0FF),
+)
 
-val AvailableThemes = listOf(DynamicTheme, OdinTheme, LightTheme, CyberpunkTheme, SnesTheme, NesTheme, XboxTheme, SteamTheme, PlayStationTheme)
+// ---- Retrô ----
+val Retro16Theme = ConsoleTheme(
+    "Retro 16-bit", Color(0xFFE5E6EA), Color(0xFFD3D6DC), Color(0xFF5A4D9C), Color(0xFF2E2E36),
+    group = ThemeGroup.RETRO, namePt = "Retrô 16-bit", accent2 = Color(0xFFB8336A),
+)
+val Retro8Theme = ConsoleTheme(
+    "Retro 8-bit", Color(0xFF2B2B2B), Color(0xFF171717), Color(0xFFE60012), Color(0xFFFFFFFF),
+    group = ThemeGroup.RETRO, namePt = "Retrô 8-bit", accent2 = Color(0xFFBDBDBD),
+)
+
+// ---- Sistema ----
+val DynamicTheme = ConsoleTheme(
+    "Dynamic", Color.Black, Color.DarkGray, Color.White, Color.White, isDynamic = true,
+    group = ThemeGroup.SYSTEM, namePt = "Dinâmico",
+)
+
+/**
+ * A lista que o índice gravado (`selected_theme_index`) indexa. NÃO reordenar nem remover: o
+ * índice está nas preferências. Temas novos entram no FIM. O seletor mostra-os por [ThemeGroup].
+ * Migração da lista antiga (v0.13: Dynamic, Odin, Light, Cyberpunk, SNES, NES, Xbox, Steam,
+ * PlayStation) em [migrateLegacyThemeIndex].
+ */
+val AvailableThemes = listOf(
+    DynamicTheme, OdinTheme, OdinFrostTheme, OdinAuroraTheme, EliteEmberTheme,
+    NeonTheme, ArenaTheme, VaporTheme, RoyalTheme, Retro16Theme, Retro8Theme,
+)
+
+/** Temas por grupo, na ordem do seletor, com o índice de cada um em [AvailableThemes]. */
+val ThemesByGroup: List<Pair<ThemeGroup, List<IndexedValue<ConsoleTheme>>>>
+    get() = ThemeGroup.entries.map { g -> g to AvailableThemes.withIndex().filter { it.value.group == g } }
+
+/** Índice da lista antiga (até v0.13) -> índice em [AvailableThemes]. */
+fun migrateLegacyThemeIndex(old: Int): Int = when (old) {
+    0 -> 0 // Dynamic
+    1 -> 1 // Odin OS -> Odin Rubi
+    2 -> 2 // Light OS -> Odin Ártico
+    3 -> 5 // Cyberpunk -> Grade Neon
+    4 -> 9 // SNES -> Retrô 16-bit
+    5 -> 10 // NES -> Retrô 8-bit
+    6 -> 6 // Xbox -> Verde Arena
+    7 -> 7 // Steam -> Azul Vapor
+    8 -> 8 // PlayStation -> Azul Real
+    else -> 1
+}
 
 @Composable
 fun getResolvedTheme(theme: ConsoleTheme, useAmoledBlack: Boolean, useGlass: Boolean = false): ConsoleTheme {
@@ -82,6 +169,16 @@ fun ConsoleTheme.glass(enabled: Boolean = true): Color = when {
     glassMode -> surface.copy(alpha = if (enabled) 0.34f else 0.22f)
     else -> surface.copy(alpha = if (!enabled) 0.35f else if (isLight) 0.82f else 0.62f)
 }
+
+/**
+ * Cor dos avisos (pisos do firmware, OC, GPU quente, bateria baixa). Um âmbar só, que se lê em
+ * TODOS os temas: claro sobre os temas escuros, escuro sobre os claros (Light OS, SNES). Antes
+ * havia um laranja fixo (#FFA23A) que quase desaparecia nos temas claros.
+ */
+val ConsoleTheme.warning: Color get() = if (isLight) Color(0xFF8A4B00) else Color(0xFFFFB454)
+
+/** Cor de perigo/erro, legível em temas claros e escuros. */
+val ConsoleTheme.danger: Color get() = if (isLight) Color(0xFFC62828) else Color(0xFFFF5A5A)
 
 /** Raio dos cantos dos cartões: mais arredondado no modo vidro. */
 val ConsoleTheme.cardRadius: Int get() = if (glassMode) 20 else 8

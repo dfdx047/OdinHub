@@ -16,6 +16,10 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -54,6 +58,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.unit.coerceAtLeast
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -96,10 +101,17 @@ fun FanCurveDialog(
 
     DisposableEffect(Unit) { onDispose { CpuStressTest.stop() } }
 
+    // A barra de navegação da ATIVIDADE: no Odin 3 a janela do Dialog começa abaixo da status bar mas
+    // vai até ao fundo do ecrã sem receber o inset de baixo, e a barra de gestos tapava o eixo do
+    // gráfico. O que faltar ao inset do próprio Dialog é completado com este.
+    val hostNavBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+
     Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+        val dialogBottom = WindowInsets.safeDrawing.asPaddingValues().calculateBottomPadding()
+        val extraBottom = (hostNavBottom - dialogBottom).coerceAtLeast(0.dp)
         Box(modifier = Modifier.fillMaxSize().background(theme.background)) {
             if (gpuStress) GpuStressBackground(onFinished = { gpuStress = false })
-            BoxWithConstraints(modifier = Modifier.fillMaxSize().safeDrawingPadding().padding(16.dp)) {
+            BoxWithConstraints(modifier = Modifier.fillMaxSize().safeDrawingPadding().padding(bottom = extraBottom).padding(16.dp)) {
                 val landscape = maxWidth > maxHeight
                 Column(modifier = Modifier.fillMaxSize()) {
                     // ---- barra de topo
@@ -235,7 +247,9 @@ private fun CurveGraph(
             val path = Path()
             pts.forEachIndexed { i, p -> if (i == 0) path.moveTo(g.x(p.tempC.toFloat()), g.y(p.percent.toFloat())) else path.lineTo(g.x(p.tempC.toFloat()), g.y(p.percent.toFloat())) }
             pts.lastOrNull()?.let { path.lineTo(g.right, g.y(it.percent.toFloat())) }
-            pts.firstOrNull()?.let { drawLine(theme.primary.copy(alpha = 0.6f), Offset(g.x(it.tempC.toFloat()), g.bottom), Offset(g.x(it.tempC.toFloat()), g.y(it.percent.toFloat())), 2.dp.toPx()) }
+            // Abaixo do 1.º ponto a ventoinha fica na % dele (FanCurveConfig.percentFor), não a 0 %:
+            // linha horizontal até à esquerda, como o patamar depois do último ponto.
+            pts.firstOrNull()?.let { drawLine(theme.primary.copy(alpha = 0.6f), Offset(g.left, g.y(it.percent.toFloat())), Offset(g.x(it.tempC.toFloat()), g.y(it.percent.toFloat())), 2.dp.toPx()) }
             drawPath(path, theme.primary, style = Stroke(width = 3.dp.toPx()))
             // pontos + balões com a %
             pts.forEachIndexed { i, p ->

@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Odin Hub: o hexágono de um chip (o Snapdragon 8 Elite do Odin 3) com a runa Ansuz (ᚨ, a runa
+    de Odin) em rubi, e três pontos por baixo (Odin 3). Desenho original; fonte em assets/icon.svg.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <!-- brilho atrás do chip -->
+    <path android:pathData="M54,54 m-30,0 a30,30 0 1,0 60,0 a30,30 0 1,0 -60,0">
+        <aapt:attr name="android:fillColor">
+            <gradient android:type="radial" android:centerX="54" android:centerY="54" android:gradientRadius="30"
+                android:startColor="#59E5002B" android:endColor="#00E5002B"/>
+        </aapt:attr>
+    </path>
+    <!-- hexágono -->
+    <path android:pathData="M54,30.5 L74.35,42.25 L74.35,65.75 L54,77.5 L33.65,65.75 L33.65,42.25 Z"
+        android:fillColor="#00000000" android:strokeColor="#EBF3F4F6" android:strokeWidth="3.6"
+        android:strokeLineJoin="round"/>
+    <!-- pinos -->
+    <path android:pathData="M28.5,47 h-4 M28.5,54 h-4 M28.5,61 h-4 M79.5,47 h4 M79.5,54 h4 M79.5,61 h4"
+        android:strokeColor="#73F3F4F6" android:strokeWidth="2.2" android:strokeLineCap="round"/>
+    <!-- runa Ansuz -->
+    <path android:pathData="M48.5,40.5 V67.5 M48.5,41.5 L60.5,52 M48.5,52 L60.5,62.5"
+        android:fillColor="#00000000" android:strokeWidth="5.4"
+        android:strokeLineCap="round" android:strokeLineJoin="round">
+        <aapt:attr name="android:strokeColor">
+            <gradient android:type="linear" android:startX="44" android:startY="38" android:endX="64" android:endY="70"
+                android:startColor="#FFFF5A3C" android:endColor="#FFE5002B"/>
+        </aapt:attr>
+    </path>
+    <!-- três pontos: Odin 3 -->
+    <path android:pathData="M47.5,84 m-1.7,0 a1.7,1.7 0 1,0 3.4,0 a1.7,1.7 0 1,0 -3.4,0" android:fillColor="#D9F3F4F6"/>
+    <path android:pathData="M54,84 m-1.7,0 a1.7,1.7 0 1,0 3.4,0 a1.7,1.7 0 1,0 -3.4,0" android:fillColor="#D9F3F4F6"/>
+    <path android:pathData="M60.5,84 m-1.7,0 a1.7,1.7 0 1,0 3.4,0 a1.7,1.7 0 1,0 -3.4,0" android:fillColor="#FFFF5A3C"/>
+</vector>

@@ -108,7 +108,25 @@ class MainViewModel @Inject constructor(
     fun installUpdate(release: com.dfdx047.odinhub.tools.AppRelease) { viewModelScope.launch { updateManager.downloadAndInstall(release) } }
     fun skipUpdate(release: com.dfdx047.odinhub.tools.AppRelease) = updateManager.skip(release)
     fun dismissUpdate() = updateManager.dismiss()
-    fun onAppResumed() { viewModelScope.launch { runCatching { updateManager.autoCheck() } } }
+    fun onAppResumed() {
+        // O perfil global pode ter mudado fora deste ecrã ("Salvar como global" no overlay ou na
+        // regra de um jogo): relê-o para a UI não mostrar (nem regravar) valores antigos.
+        _uiState.update {
+            it.copy(
+                activeLimitMode = prefs.activeLimitMode,
+                tdpValue = prefs.tdpValue,
+                tdpProfileId = prefs.tdpProfileId,
+                cpuPerfClock = prefs.cpuPerfClock,
+                cpuPrimeClock = prefs.cpuPrimeClock,
+                cpuEffClock = prefs.cpuEffClock,
+                gpuClock = prefs.gpuClock,
+                offlineCpuMask = prefs.offlineCpuMask,
+                clockPinMask = prefs.clockPinMask,
+                fanMode = prefs.fanMode,
+            )
+        }
+        viewModelScope.launch { runCatching { updateManager.autoCheck() } }
+    }
 
     private val _uiState = MutableStateFlow(MainUiModel())
     val uiState: StateFlow<MainUiModel> = _uiState.asStateFlow()
@@ -157,6 +175,8 @@ class MainViewModel @Inject constructor(
                 cpuPerfClock = prefs.cpuPerfClock,
                 cpuPrimeClock = prefs.cpuPrimeClock,
                 cpuEffClock = prefs.cpuEffClock,
+                offlineCpuMask = prefs.offlineCpuMask,
+                clockPinMask = prefs.clockPinMask,
                 gpuClock = prefs.gpuClock,
 
                 currentSaturation = prefs.saturationOverride,
@@ -263,6 +283,15 @@ class MainViewModel @Inject constructor(
             }
         }
         viewModelScope.launch {
+            performanceManager.coreStates.collect { states -> _uiState.update { it.copy(coreStates = states) } }
+        }
+        viewModelScope.launch {
+            performanceManager.gpuLive.collect { live -> _uiState.update { it.copy(gpuLive = live) } }
+        }
+        viewModelScope.launch {
+            performanceManager.firmwareFloors.collect { floors -> _uiState.update { it.copy(firmwareFloors = floors) } }
+        }
+        viewModelScope.launch {
             performanceManager.autoTdpStatus.collect { telemetry ->
                 _uiState.update { it.copy(autoTdp = telemetry) }
             }
@@ -275,7 +304,7 @@ class MainViewModel @Inject constructor(
             prefs.customProfilesFlow.collect { list -> _uiState.update { it.copy(customProfiles = list) } }
         }
 
-        // "AYN Odin 2 detetado": uma vez por aparelho (ou ao trocar de aparelho com backup restaurado).
+        // "AYN Odin 3 detetado": uma vez por aparelho (ou ao trocar de aparelho com backup restaurado).
         if (prefs.lastDetectedDeviceId != device.id + ":" + device.name) {
             prefs.lastDetectedDeviceId = device.id + ":" + device.name
             val message = if (device.official) {
@@ -322,6 +351,7 @@ class MainViewModel @Inject constructor(
                     (current.cpuPrimeClock * 1000).toLong(),
                     (current.gpuClock * 1_000_000).toLong(),
                     (current.cpuEffClock * 1000).toLong(),
+                    current.clockPinMask,
                 )
             }
         }
@@ -400,8 +430,50 @@ class MainViewModel @Inject constructor(
         clockJob = viewModelScope.launch(Dispatchers.IO) {
             delay(LIVE_APPLY_DEBOUNCE_MS)
             if (prefs.activeLimitMode != "TDP") {
-                performanceManager.applyAbsoluteClocks((perfClock * 1000).toLong(), (primeClock * 1000).toLong(), (gpuClock * 1000000).toLong(), (effClock * 1000).toLong())
+                performanceManager.applyAbsoluteClocks((perfClock * 1000).toLong(), (primeClock * 1000).toLong(), (gpuClock * 1000000).toLong(), (effClock * 1000).toLong(), prefs.clockPinMask)
             }
+        }
+    }
+
+    // ---- Núcleos e fixação de clocks (perfil GLOBAL) ----
+
+    val cpuClusters: List<com.dfdx047.odinhub.tools.hardware.CpuCluster> get() = performanceManager.clusters
+    val possibleCpus: List<Int> get() = performanceManager.possibleCpus
+
+    /**
+     * Núcleos do perfil global. Aplica JÁ (para se ver o estado real no cartão); ao voltar ao
+     * launcher todos voltam a ligar, e dentro de um jogo sem regra própria vale esta máscara.
+     */
+    fun updateCoreMask(mask: Int) {
+        val safe = com.dfdx047.odinhub.tools.hardware.CpuHotplug.sanitize(mask, possibleCpus.ifEmpty { (0..7).toList() })
+        prefs.offlineCpuMask = safe
+        _uiState.update { it.copy(offlineCpuMask = safe) }
+        viewModelScope.launch(Dispatchers.IO) { performanceManager.applyCoreMask(safe) }
+    }
+
+    /** Liga todos os núcleos (botão "Todos ligados"). */
+    fun resetCores() = updateCoreMask(com.dfdx047.odinhub.tools.hardware.CpuHotplug.ALL_ONLINE)
+
+    fun updateClockPinMask(mask: Int) {
+        prefs.clockPinMask = mask
+        _uiState.update { it.copy(clockPinMask = mask) }
+        val current = _uiState.value
+        clockJob?.cancel()
+        clockJob = viewModelScope.launch(Dispatchers.IO) {
+            if (prefs.activeLimitMode != "TDP") {
+                performanceManager.applyAbsoluteClocks(
+                    (current.cpuPerfClock * 1000).toLong(), (current.cpuPrimeClock * 1000).toLong(),
+                    (current.gpuClock * 1_000_000).toLong(), (current.cpuEffClock * 1000).toLong(), mask,
+                )
+            }
+        }
+    }
+
+    /** Lê o estado real (núcleos + GPU) enquanto o ecrã de Desempenho está aberto. */
+    fun refreshHardwareLive() {
+        viewModelScope.launch(Dispatchers.IO) {
+            performanceManager.refreshCoreStates()
+            performanceManager.refreshGpuLive()
         }
     }
 

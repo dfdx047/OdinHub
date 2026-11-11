@@ -70,6 +70,23 @@ object AutoTdpController {
     }
 
     /**
+     * Alvo mudado com o loop em PAUSA (a carregar / sem leitura válida): sem medição não há passo,
+     * por isso os tetos seguem o novo alvo pela mesma proporção do ponto de partida
+     * ([feedForward]) -- o que o loop já tinha aprendido (ex: 70 % em vez de 63 % a 10 W) mantém-se.
+     * Sem isto, mudar o alvo menos de 15 % (que não recomeça o loop) com o aparelho ligado à
+     * corrente não mexia em nada: 10 -> 11 W ficava nos tetos dos 10 W até tirar o cabo.
+     */
+    fun retarget(state: AutoTdpState, fromWatts: Float, toWatts: Float, maxWatts: Float, minRatio: Float): AutoTdpState {
+        if (fromWatts == toWatts || fromWatts <= 0f || toWatts <= 0f) return state
+        val factor = feedForward(toWatts, maxWatts, minRatio) / feedForward(fromWatts, maxWatts, minRatio)
+        return state.copy(
+            cpuRatio = (state.cpuRatio * factor).coerceIn(minRatio, 1f),
+            gpuRatio = (state.gpuRatio * factor).coerceIn(minRatio, 1f),
+            integral = 0f,
+        )
+    }
+
+    /**
      * Um passo do controlador (chamado ~1x por segundo).
      *
      * @param measuredWatts média das amostras desde o último passo; <= 0 = sem medição (passo ignorado).

@@ -31,10 +31,12 @@ import com.dfdx047.odinhub.models.FanMode
 import com.dfdx047.odinhub.models.FeatureFlags
 import com.dfdx047.odinhub.models.TdpProfiles
 import com.dfdx047.odinhub.ui.screens.ClockChipRow
+import com.dfdx047.odinhub.ui.screens.ClockPinRow
 import com.dfdx047.odinhub.ui.screens.MacroEditorDialog
 import com.dfdx047.odinhub.ui.screens.MacroModeChips
 import com.dfdx047.odinhub.models.ButtonMacros
 import com.dfdx047.odinhub.models.MacroMode
+import com.dfdx047.odinhub.ui.screens.CoreToggleGrid
 import com.dfdx047.odinhub.tools.hardware.ThermalLimitModes
 import com.dfdx047.odinhub.ui.theme.AvailableThemes
 import com.dfdx047.odinhub.ui.theme.ConsoleTheme
@@ -310,6 +312,60 @@ fun AppOverridesScreen(
                 }
             }
 
+            item {
+                val mask = uiState.offlineCpuMask
+                AppOverrideCard(
+                    title = if (isEn) "CPU Cores" else "Núcleos da CPU",
+                    subtitle = when {
+                        mask == null -> if (isEn) "Follows global" else "Segue o global"
+                        mask == 0 -> if (isEn) "All on" else "Todos ligados"
+                        else -> (if (isEn) "Off: " else "Desligados: ") + com.dfdx047.odinhub.tools.hardware.CpuHotplug.cpusOf(mask).joinToString { "CPU$it" }
+                    },
+                    enabled = true, onClick = null, theme = theme,
+                ) {
+                    Column {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            OverrideChip("Global", mask == null, accentColor, theme, Modifier.weight(1f)) { tap(); viewModel.updateCoreMask(null) }
+                            OverrideChip(if (isEn) "Own for this game" else "Própria do jogo", mask != null, accentColor, theme, Modifier.weight(1f)) { tap(); if (mask == null) viewModel.updateCoreMask(0) }
+                        }
+                        if (mask != null) {
+                            Spacer(modifier = Modifier.height(10.dp))
+                            CoreToggleGrid(
+                                clusters = viewModel.cpuClusters, possible = viewModel.possibleCpus, mask = mask,
+                                realStates = emptyList(), theme = theme, isEn = isEn,
+                            ) { tap(); viewModel.updateCoreMask(it) }
+                        }
+                    }
+                }
+            }
+
+            if (!isTdpMode) item {
+                val pin = uiState.clockPinMask
+                AppOverrideCard(
+                    title = if (isEn) "Clock Lock" else "Fixar Clocks",
+                    subtitle = when {
+                        pin == null -> if (isEn) "Follows global" else "Segue o global"
+                        pin == 0 -> if (isEn) "All free (governor)" else "Tudo livre (governador)"
+                        else -> if (isEn) "Some clocks fixed" else "Alguns clocks fixos"
+                    },
+                    enabled = true, onClick = null, theme = theme,
+                ) {
+                    Column {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            OverrideChip("Global", pin == null, accentColor, theme, Modifier.weight(1f)) { tap(); viewModel.updateClockPinMask(null) }
+                            OverrideChip(if (isEn) "Own for this game" else "Própria do jogo", pin != null, accentColor, theme, Modifier.weight(1f)) { tap(); if (pin == null) viewModel.updateClockPinMask(0) }
+                        }
+                        if (pin != null) {
+                            Spacer(modifier = Modifier.height(10.dp))
+                            ClockPinRow(
+                                pinMask = pin, kinds = viewModel.cpuClusters.map { it.kind },
+                                hasGpu = true, theme = theme, isEn = isEn,
+                            ) { tap(); viewModel.updateClockPinMask(it) }
+                        }
+                    }
+                }
+            }
+
             // Motor gráfico (SGSR / ReShade / Frame Gen): escondido enquanto não existir um motor
             // que atue de facto dentro dos jogos -- ver FeatureFlags.GRAPHICS_ENGINE_AVAILABLE.
             if (FeatureFlags.GRAPHICS_ENGINE_AVAILABLE) {
@@ -405,6 +461,22 @@ fun AppOverridesScreen(
 
             item {
                 Spacer(modifier = Modifier.height(24.dp))
+                // Atalho explícito para o perfil global: o que está neste ecrã passa a valer para
+                // todos os jogos sem regra própria (a regra deste jogo não muda).
+                var savedGlobal by remember { mutableStateOf(false) }
+                OutlinedButton(
+                    onClick = { tap(); viewModel.saveAsGlobal(); savedGlobal = true },
+                    modifier = Modifier.fillMaxWidth().height(46.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, accentColor.copy(alpha = 0.6f)),
+                ) {
+                    Text(
+                        if (savedGlobal) (if (isEn) "Saved as the global profile ✓" else "Salvo como perfil global ✓")
+                        else (if (isEn) "Save these settings as the global profile" else "Salvar estes ajustes como perfil global"),
+                        color = accentColor, fontWeight = FontWeight.Bold,
+                    )
+                }
+                Spacer(modifier = Modifier.height(12.dp))
                 Row(modifier = Modifier.fillMaxWidth().padding(bottom = 32.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                     if (uiState.isSaved) {
                         Button(

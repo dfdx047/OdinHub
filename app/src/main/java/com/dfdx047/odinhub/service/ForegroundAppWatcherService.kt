@@ -5,6 +5,7 @@ import android.view.KeyEvent
 import android.view.accessibility.AccessibilityEvent
 import dagger.hilt.android.AndroidEntryPoint
 import com.dfdx047.odinhub.data.AppOverrideEntity
+import com.dfdx047.odinhub.tools.hardware.CpuHotplug
 import com.dfdx047.odinhub.data.AppOverrideRepository
 import com.dfdx047.odinhub.data.SharedPrefsRepo
 import com.dfdx047.odinhub.models.FanMode
@@ -105,7 +106,7 @@ class ForegroundAppWatcherService : AccessibilityService() {
             if (pkg == null) {
                 // Não se sabe o que está à frente: aplica o perfil GLOBAL (o que o utilizador
                 // escolheu por omissão) em vez de deixar o aparelho no estado de arranque.
-                applyProfile(null)
+                applyProfile(null, inUserApp = false)
                 return@launch
             }
             // Um evento de acessibilidade pode ter chegado entretanto: esse manda.
@@ -114,7 +115,7 @@ class ForegroundAppWatcherService : AccessibilityService() {
             val isUserApp = foregroundTracker.onForegroundPackage(pkg)
             // Espera pela primeira leitura do Room: num processo acabado de arrancar o cache está
             // vazio e a regra do jogo era lida como "não existe".
-            applyProfile(if (isUserApp) overrideRepository.getWhenLoaded(pkg) else null)
+            applyProfile(if (isUserApp) overrideRepository.getWhenLoaded(pkg) else null, inUserApp = isUserApp)
         }
     }
 
@@ -161,6 +162,10 @@ class ForegroundAppWatcherService : AccessibilityService() {
         // ao puxar a barra de notificações (ver ForegroundAppTracker.isTransientWindow).
         if (foregroundTracker.isTransientWindow(pkg)) return
 
+        // Janela flutuante de OUTRA app (HUD, bolha de chat...) por cima do jogo: não é trocar de
+        // app (ver ForegroundAppTracker.isForeignOverlayWindow).
+        if (foregroundTracker.isForeignOverlayWindow(pkg, event.className?.toString())) return
+
         if (pkg == currentApp) return
         currentApp = pkg
 
@@ -181,13 +186,14 @@ class ForegroundAppWatcherService : AccessibilityService() {
 
             if (isUserApp) {
                 // Regra do jogo, ou os valores globais quando o jogo ainda não tem regra própria.
-                applyProfile(overrideRepository.getWhenLoaded(pkg))
+                applyProfile(overrideRepository.getWhenLoaded(pkg), inUserApp = true)
             } else {
                 // Saímos de um jogo para a home/sistema/própria app: devolvemos o aparelho ao
                 // perfil GLOBAL. Sem isto, o limite do último jogo continuava a valer para o
                 // sistema inteiro -- exatamente o "ele fica controlando o sistema inteiro" que
                 // foi relatado. As regras por app só valem dentro do app a que pertencem.
-                applyProfile(null)
+                // Núcleos: fora de um jogo ficam TODOS ligados (regra do hotplug).
+                applyProfile(null, inUserApp = false)
             }
         }
     }
@@ -195,8 +201,14 @@ class ForegroundAppWatcherService : AccessibilityService() {
     /**
      * Aplica um perfil ao hardware. `override == null` significa "usa os valores globais"
      * (ecrã de Settings), que é também o estado para onde voltamos ao sair de um jogo.
+     * [inUserApp] = há um jogo/app de utilizador à frente; fora disso todos os núcleos ligam.
      */
-    private fun applyProfile(override: AppOverrideEntity?) {
+    private fun applyProfile(override: AppOverrideEntity?, inUserApp: Boolean) {
+        // 0. Núcleos: a máscara do jogo (ou a global) só dentro de um jogo; fora dele, todos
+        // ligados. O PerformanceManager aplica as regras de segurança (nunca o cpu0, etc.).
+        val coreMask = if (inUserApp) override?.offlineCpuMask ?: prefs.offlineCpuMask else CpuHotplug.ALL_ONLINE
+        performanceManager.applyCoreMask(coreMask)
+
         // 1. TDP ou Clocks -- MUTUAMENTE EXCLUSIVOS. limitMode é por jogo (override?.limitMode);
         // sem override, usa o modo global (prefs.activeLimitMode), igual ao ecrã de Settings.
         val limitMode = override?.limitMode ?: prefs.activeLimitMode
@@ -215,7 +227,8 @@ class ForegroundAppWatcherService : AccessibilityService() {
             val primeKHz = override?.primeClockKHz ?: (prefs.cpuPrimeClock * 1000).toLong()
             val gpuHz = override?.gpuClockHz ?: (prefs.gpuClock * 1_000_000).toLong()
             val effKHz = override?.effClockKHz ?: (prefs.cpuEffClock * 1000).toLong()
-            performanceManager.applyAbsoluteClocks(perfKHz, primeKHz, gpuHz, effKHz)
+            val pinMask = override?.clockPinMask ?: prefs.clockPinMask
+            performanceManager.applyAbsoluteClocks(perfKHz, primeKHz, gpuHz, effKHz, pinMask)
         }
 
         // 2. Ventoinha baseada no modelo FanMode

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Odin Hub: versão monocromática (ícones temáticos do Android 13+). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <path android:pathData="M54,30.5 L74.35,42.25 L74.35,65.75 L54,77.5 L33.65,65.75 L33.65,42.25 Z"
+        android:fillColor="#00000000" android:strokeColor="#FFFFFFFF" android:strokeWidth="3.6"
+        android:strokeLineJoin="round"/>
+    <path android:pathData="M48.5,40.5 V67.5 M48.5,41.5 L60.5,52 M48.5,52 L60.5,62.5"
+        android:fillColor="#00000000" android:strokeColor="#FFFFFFFF" android:strokeWidth="5.4"
+        android:strokeLineCap="round" android:strokeLineJoin="round"/>
+    <path android:pathData="M54,84 m-1.7,0 a1.7,1.7 0 1,0 3.4,0 a1.7,1.7 0 1,0 -3.4,0 M47.5,84 m-1.7,0 a1.7,1.7 0 1,0 3.4,0 a1.7,1.7 0 1,0 -3.4,0 M60.5,84 m-1.7,0 a1.7,1.7 0 1,0 3.4,0 a1.7,1.7 0 1,0 -3.4,0" android:fillColor="#FFFFFFFF"/>
+</vector>

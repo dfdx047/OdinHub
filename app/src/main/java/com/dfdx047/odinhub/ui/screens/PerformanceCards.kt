@@ -47,6 +47,8 @@ import com.dfdx047.odinhub.tools.hardware.ThermalLimitModes
 import com.dfdx047.odinhub.tools.hardware.ThermalManager
 import com.dfdx047.odinhub.tools.hardware.ThermalStatus
 import com.dfdx047.odinhub.ui.theme.ConsoleTheme
+import com.dfdx047.odinhub.ui.theme.danger
+import com.dfdx047.odinhub.ui.theme.warning
 
 /**
  * Cartões da aba Performance (TDP, clocks manuais e limite térmico), separados de
@@ -253,6 +255,8 @@ fun ClockChipRow(
     enabled: Boolean,
     theme: ConsoleTheme,
     isEn: Boolean,
+    /** Máximo de fábrica: chips acima dele são OPPs de overclock do kernel e levam "OC". */
+    ocAboveMHz: Int? = null,
     onSelect: (Int) -> Unit,
 ) {
     var showAll by remember { mutableStateOf(false) }
@@ -281,12 +285,17 @@ fun ClockChipRow(
     Spacer(modifier = Modifier.height(4.dp))
     Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
         for (mhz in visible) {
+            val isOc = ocAboveMHz != null && mhz > ocAboveMHz
             PerfChip(
-                label = "$mhz MHz",
+                label = if (isOc) "$mhz MHz OC" else "$mhz MHz",
                 selected = highlighted == mhz,
                 enabled = enabled,
                 theme = theme,
-                textColor = if (highlighted == mhz) theme.onPrimary else theme.text,
+                textColor = when {
+                    highlighted == mhz -> theme.onPrimary
+                    isOc -> theme.warning
+                    else -> theme.text
+                },
             ) { onSelect(mhz) }
         }
     }
@@ -312,6 +321,14 @@ fun ManualClockCard(
     /** (perf, prime, gpu, eficiência) em MHz. */
     onClocks: (Float, Float, Float, Float) -> Unit,
     onSavePreset: (String, Float, Float, Float, Float) -> Unit,
+    /** Fixo/livre por cluster e GPU (ver ClockPin); `null` = não mostrar. */
+    pinMask: Int? = null,
+    clusterKinds: List<com.dfdx047.odinhub.tools.hardware.ClusterKind> = emptyList(),
+    onPinChange: (Int) -> Unit = {},
+    gpuLive: com.dfdx047.odinhub.tools.hardware.GpuLiveInfo? = null,
+    stockGpuMaxMHz: Int? = null,
+    /** Pisos do modo de desempenho do firmware (MHz por cluster): o teto não desce abaixo deles. */
+    firmwareFloorsMHz: Map<com.dfdx047.odinhub.tools.hardware.ClusterKind, Int> = emptyMap(),
 ) {
     var presetName by remember { mutableStateOf("") }
     val sourceHint = when {
@@ -322,7 +339,7 @@ fun ManualClockCard(
 
     ConsoleCard(
         if (isEn) "Manual Clocks" else "Clocks Manuais",
-        if (isEn) "Pin exact frequencies -- GPU is independent" else "Fixar frequências exatas -- a GPU é independente",
+        if (isEn) "Cap or pin exact frequencies -- GPU is independent" else "Limitar ou fixar frequências exatas -- a GPU é independente",
         theme,
         enabled = enabled,
     ) {
@@ -331,6 +348,32 @@ fun ManualClockCard(
                 DisabledModeHint(if (isEn) "Disabled while TDP mode is active" else "Desativado enquanto o modo TDP está ativo", theme)
             }
             Text(sourceHint, color = theme.text.copy(alpha = 0.5f), fontFamily = theme.fontFamily, fontSize = 10.sp)
+            if (firmwareFloorsMHz.isNotEmpty()) {
+                val floors = firmwareFloorsMHz.entries.sortedBy { it.key.ordinal }
+                // Aviso só quando o piso está mesmo a impedir o teto escolhido; senão, informação.
+                val blocked = floors.filter { (k, v) ->
+                    val cap = when (k) {
+                        com.dfdx047.odinhub.tools.hardware.ClusterKind.EFFICIENCY -> effMHz
+                        com.dfdx047.odinhub.tools.hardware.ClusterKind.PERF -> perfMHz
+                        com.dfdx047.odinhub.tools.hardware.ClusterKind.PRIME -> primeMHz
+                    }
+                    cap > 0f && cap.toInt() < v
+                }
+                Text(
+                    (if (isEn) "Firmware performance mode floors: " else "Pisos do modo de desempenho do firmware: ") +
+                        floors.joinToString(" · ") { (k, v) -> "${clusterLabel(k, isEn)} $v MHz" },
+                    color = theme.text.copy(alpha = 0.5f), fontFamily = theme.fontFamily, fontSize = 10.sp,
+                )
+                if (blocked.isNotEmpty()) {
+                    WarningNote(
+                        blocked.joinToString("\n") { (k, v) ->
+                            if (isEn) "${clusterLabel(k, isEn)}: the cap is below the firmware floor, so it stays at $v MHz."
+                            else "${clusterLabel(k, isEn)}: o teto está abaixo do piso do firmware, por isso fica em $v MHz."
+                        },
+                        theme,
+                    )
+                }
+            }
 
             val userClockProfiles = customProfiles.filter { it.type == "CLOCK" }
             if (userClockProfiles.isNotEmpty()) {
@@ -388,7 +431,17 @@ fun ManualClockCard(
                 enabled = enabled,
                 theme = theme,
                 isEn = isEn,
+                ocAboveMHz = stockGpuMaxMHz,
             ) { onClocks(perfMHz, primeMHz, it.toFloat(), effMHz) }
+            if (gpuLive != null) {
+                Spacer(modifier = Modifier.height(6.dp))
+                GpuStatusLine(gpuLive, stockGpuMaxMHz, theme, isEn)
+            }
+
+            if (pinMask != null) {
+                Spacer(modifier = Modifier.height(16.dp))
+                ClockPinRow(pinMask, clusterKinds, hasGpu = true, theme = theme, isEn = isEn, enabled = enabled, onChange = onPinChange)
+            }
 
             Spacer(modifier = Modifier.height(12.dp))
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -493,7 +546,7 @@ fun ThermalLimitCard(
                     theme,
                 )
             } else if (!enabled) {
-                DisabledModeHint(if (isEn) "Requires PServerBinder (stock AYN/Retroid firmware)" else "Requer o PServerBinder (firmware AYN/Retroid de fábrica)", theme)
+                DisabledModeHint(if (isEn) "Requires PServerBinder (stock Retroid firmware)" else "Requer o PServerBinder (firmware Retroid de fábrica)", theme)
             }
             if (status.fromAppOverride) {
                 val active = when (status.activeMode) {
@@ -573,7 +626,7 @@ fun ThermalLimitCard(
                     ThermalManager.ERR_DISCOVER_FAILED -> if (isEn) "Zone discovery failed: " else "Falha na deteção de zonas: "
                     else -> code
                 }
-                Text(message + status.lastErrorDetail.orEmpty(), color = Color(0xFFFF5252), fontFamily = theme.fontFamily, fontSize = 10.sp, modifier = Modifier.padding(top = 6.dp))
+                Text(message + status.lastErrorDetail.orEmpty(), color = theme.danger, fontFamily = theme.fontFamily, fontSize = 10.sp, modifier = Modifier.padding(top = 6.dp))
             }
         }
     }

@@ -45,6 +45,25 @@ enum class HudLayout(val labelEn: String, val labelPt: String) {
     fun label(isEn: Boolean): String = if (isEn) labelEn else labelPt
 }
 
+/**
+ * Estilo visual do HUD. [APP] segue o tema da app (cores, vidro, AMOLED); os outros são fixos,
+ * pensados para se lerem por cima de qualquer jogo.
+ */
+enum class HudStyle(val labelEn: String, val labelPt: String) {
+    APP("App theme", "Tema da app"),
+    /** Cores por grupo como as predefinições do MangoHud (FPS, CPU, GPU, RAM...), fundo preto. */
+    MANGO("MangoHud", "MangoHud"),
+    /** Sem fundo: só texto branco com sombra forte. */
+    MINIMAL("Minimal", "Minimal"),
+    /** Fundo escuro, texto ciano/magenta com brilho. */
+    NEON("Neon", "Neon"),
+    /** Verde monoespaçado sobre preto. */
+    TERMINAL("Terminal", "Terminal"),
+    ;
+
+    fun label(isEn: Boolean): String = if (isEn) labelEn else labelPt
+}
+
 /** Canto/borda onde o HUD fica (o utilizador pode depois arrastá-lo). */
 enum class HudPosition(val labelEn: String, val labelPt: String) {
     TOP_LEFT("Top left", "Topo esq."),
@@ -66,10 +85,11 @@ data class HudConfig(
     val layout: HudLayout = HudLayout.HORIZONTAL,
     val position: HudPosition = HudPosition.TOP_LEFT,
     val metrics: Set<HudMetric> = HudMetric.DEFAULT,
-    /** 0.8 / 1.0 / 1.25 -- tamanho do texto. */
+    /** Tamanho do HUD ([MIN_SCALE]..[MAX_SCALE]); muda-se no cartão ou com pinça/canto no próprio HUD. */
     val textScale: Float = 1f,
     /** Opacidade do fundo do HUD (0..1). */
     val backgroundOpacity: Float = 0.75f,
+    val style: HudStyle = HudStyle.APP,
 ) {
     fun has(metric: HudMetric): Boolean = metric in metrics
 
@@ -78,6 +98,12 @@ data class HudConfig(
 
     companion object {
         val TEXT_SCALES = listOf(0.8f, 1f, 1.25f)
+        const val MIN_SCALE = 0.6f
+        const val MAX_SCALE = 2.5f
+
+        /** Tamanho válido: dentro dos limites e arredondado a 0.05 (não grava 1.2371...). */
+        fun clampScale(scale: Float): Float =
+            (Math.round(scale.coerceIn(MIN_SCALE, MAX_SCALE) * 20f) / 20f).coerceIn(MIN_SCALE, MAX_SCALE)
 
         fun encodeMetrics(metrics: Set<HudMetric>): String = HudMetric.entries.filter { it in metrics }.joinToString(",") { it.id }
 
@@ -206,6 +232,36 @@ object HudMath {
     }
 
     /** /proc/meminfo -> (usada, total) em MB, com MemAvailable. */
+    /**
+     * Consumo do aparelho em watts e se há carregador.
+     *  - Na tomada: o que entra pelo USB (`usb/voltage_now` x `usb/input_current_now`) MENOS o que
+     *    entra na bateria. No RP5 a corrente da bateria é positiva a carregar e negativa a
+     *    descarregar (docs/device-rp5.md §4), por isso: USB - I_bat x V_bat. Assim conta também a
+     *    bateria a ajudar o carregador em carga (3DMark: USB 2,4 W e bateria a -1,3 A).
+     *    Com o bypass a bateria fica perto de 0 e o consumo é o do USB.
+     *  - Só na bateria: |corrente| x tensão da bateria.
+     * Unidades: µA/µV (alguns kernels dão mA; o mesmo critério do [AutoTdpController.batteryWatts]).
+     */
+    fun systemPower(batteryCurrent: Long?, batteryVoltageUv: Long?, usbInputCurrent: Long?, usbVoltageUv: Long?): Pair<Float, Boolean>? {
+        fun amps(raw: Long): Float = if (kotlin.math.abs(raw) in 1 until 20_000) raw / 1_000f else raw / 1_000_000f
+        val battery = if (batteryCurrent != null && batteryVoltageUv != null && batteryVoltageUv > 0)
+            amps(batteryCurrent) * (batteryVoltageUv / 1_000_000f) else null
+        if (usbInputCurrent != null && usbVoltageUv != null && usbVoltageUv >= USB_MIN_UV) {
+            val a = amps(usbInputCurrent)
+            if (a >= USB_MIN_A) {
+                val usb = a * (usbVoltageUv / 1_000_000f)
+                // Sinal ao contrário noutro kernel daria um valor sem sentido: fica só o USB.
+                val total = battery?.let { usb - it }?.takeIf { it > 0f } ?: usb
+                return total to true
+            }
+        }
+        return battery?.let { kotlin.math.abs(it) to false }
+    }
+
+    /** Abaixo disto não há carregador (ruído do sensor com o cabo fora). */
+    private const val USB_MIN_UV = 4_000_000L
+    private const val USB_MIN_A = 0.05f
+
     fun parseMeminfo(raw: String?): Pair<Int, Int>? {
         if (raw.isNullOrBlank()) return null
         fun kb(key: String) = Regex("(?m)^$key:\\s+(\\d+)").find(raw)?.groupValues?.get(1)?.toLongOrNull()
@@ -229,6 +285,8 @@ object HudMath {
     /** Papel de uma zona térmica pelo seu `type`: CPU, GPU ou nenhum. */
     fun zoneRole(type: String?): String? {
         val t = type?.trim()?.lowercase() ?: return null
+        // "gpu-skin-avg-step" (RP5) é a temperatura da CARCAÇA perto da GPU, não da GPU.
+        if (t.contains("skin")) return null
         return when {
             CPU_ZONE.containsMatchIn(t) -> "CPU"
             GPU_ZONE.containsMatchIn(t) -> "GPU"
@@ -283,6 +341,10 @@ class FpsTracker(private val bufferNs: Long = 30_000_000_000L) {
         return (recent.size - 1) * 1e9f / span
     }
 
+    /** Tempo de cada um dos últimos [count] frames (ms), do mais antigo para o mais recente. */
+    fun recentFrameTimesMs(count: Int): List<Float> =
+        presents.toList().takeLast(count + 1).zipWithNext { a, b -> (b - a) / 1e6f }.filter { it > 0f }
+
     /** Frame time médio da última janela, em ms. */
     fun frametimeMs(windowNs: Long = 1_000_000_000L): Float? = fps(windowNs)?.takeIf { it > 0f }?.let { 1000f / it }
 
@@ -293,5 +355,60 @@ class FpsTracker(private val bufferNs: Long = 30_000_000_000L) {
         if (gaps.isEmpty()) return null
         val p99 = gaps[((gaps.size - 1) * 0.99).toInt()]
         return 1e9f / p99
+    }
+}
+
+/**
+ * Predefinições e grupos de métricas do HUD, usados pelo separador "HUD" do painel rápido e pelo
+ * cartão do HUD. Puro (sem Android) para os testes.
+ */
+object HudPresets {
+    data class Preset(val id: String, val labelEn: String, val labelPt: String, val metrics: Set<HudMetric>) {
+        fun label(isEn: Boolean): String = if (isEn) labelEn else labelPt
+    }
+
+    data class Group(val labelEn: String, val labelPt: String, val metrics: List<HudMetric>) {
+        fun label(isEn: Boolean): String = if (isEn) labelEn else labelPt
+    }
+
+    val FPS_ONLY = Preset("fps", "FPS only", "Só FPS", linkedSetOf(HudMetric.FPS))
+    val ESSENTIAL = Preset(
+        "essential", "Essential", "Essencial",
+        linkedSetOf(HudMetric.FPS, HudMetric.CPU_TEMP, HudMetric.GPU_TEMP, HudMetric.POWER, HudMetric.BATTERY),
+    )
+    val STANDARD = Preset("standard", "Standard", "Padrão", HudMetric.DEFAULT)
+    val FULL = Preset("full", "Full", "Completo", HudMetric.entries.toCollection(linkedSetOf()))
+
+    val all: List<Preset> = listOf(FPS_ONLY, ESSENTIAL, STANDARD, FULL)
+
+    val groups: List<Group> = listOf(
+        Group("FRAMES", "QUADROS", listOf(HudMetric.FPS, HudMetric.FRAMETIME, HudMetric.FPS_LOW, HudMetric.FPS_GRAPH)),
+        Group("CPU", "CPU", listOf(HudMetric.CPU_USAGE, HudMetric.CPU_TEMP, HudMetric.CPU_CLUSTERS, HudMetric.CPU_CORES)),
+        Group("GPU", "GPU", listOf(HudMetric.GPU_LOAD, HudMetric.GPU_TEMP, HudMetric.GPU_FREQ)),
+        Group("SYSTEM", "SISTEMA", listOf(HudMetric.RAM, HudMetric.POWER, HudMetric.TDP, HudMetric.BATTERY, HudMetric.BATTERY_TEMP, HudMetric.CLOCK)),
+    )
+
+    /** Liga/desliga uma métrica, mantendo a ordem do enum (a ordem em que o HUD as desenha). */
+    fun toggle(metrics: Set<HudMetric>, metric: HudMetric): Set<HudMetric> =
+        HudMetric.entries.filter { if (it == metric) it !in metrics else it in metrics }.toCollection(linkedSetOf())
+
+    /** Rótulo curto para os chips do painel (390 dp de largura). */
+    fun shortLabel(metric: HudMetric, isEn: Boolean): String = when (metric) {
+        HudMetric.FPS -> "FPS"
+        HudMetric.FRAMETIME -> "Frame time"
+        HudMetric.FPS_LOW -> "1% low"
+        HudMetric.FPS_GRAPH -> if (isEn) "Graph" else "Gráfico"
+        HudMetric.CPU_USAGE -> if (isEn) "Load" else "Uso"
+        HudMetric.CPU_TEMP, HudMetric.GPU_TEMP -> if (isEn) "Temp" else "Temp."
+        HudMetric.CPU_CLUSTERS -> "Clusters"
+        HudMetric.CPU_CORES -> if (isEn) "Cores" else "Núcleos"
+        HudMetric.GPU_LOAD -> if (isEn) "Load" else "Uso"
+        HudMetric.GPU_FREQ -> "MHz"
+        HudMetric.RAM -> "RAM"
+        HudMetric.POWER -> if (isEn) "Watts" else "Watts"
+        HudMetric.BATTERY -> if (isEn) "Battery" else "Bateria"
+        HudMetric.BATTERY_TEMP -> if (isEn) "Batt. temp" else "Temp. bat."
+        HudMetric.TDP -> "TDP"
+        HudMetric.CLOCK -> if (isEn) "Time" else "Hora"
     }
 }

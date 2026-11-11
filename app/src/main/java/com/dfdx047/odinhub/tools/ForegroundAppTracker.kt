@@ -235,6 +235,34 @@ class ForegroundAppTracker @Inject constructor(
     fun isTransientWindow(pkg: String): Boolean =
         com.dfdx047.odinhub.models.FeatureFlags.IGNORE_TRANSIENT_WINDOWS && pkg.isNotBlank() && pkg != context.packageName && pkg !in homePackages && !isTrackableApp(pkg)
 
+    private val activityCache = ConcurrentHashMap<String, Boolean>()
+
+    /**
+     * BUG VISTO NO RP5: com outra app de overlay instalada (o HUD da Odin Hub), cada vez que a
+     * janela flutuante dela aparecia ou mudava, o sistema emitia um TYPE_WINDOW_STATE_CHANGED com
+     * o pacote DELA por cima do jogo. Como esse pacote tem launcher, contava como "troca de app":
+     * o perfil do jogo era trocado pelo global (núcleos todos ligados) e o overlay dizia
+     * "Perfil de OdinHub" dentro do ARMSX2.
+     *
+     * Uma troca de app verdadeira traz o nome de uma Activity desse pacote no className. Uma
+     * janela de overlay traz uma View/Layout (FrameLayout, ComposeView...). Esta função devolve
+     * true para esses eventos, que se ignoram. Launchers e a própria app passam sempre (sair do
+     * jogo para a home tem de ser sempre detetado), tal como um className vazio (comportamento
+     * antigo).
+     */
+    fun isForeignOverlayWindow(pkg: String, className: String?): Boolean {
+        if (className.isNullOrBlank()) return false
+        if (pkg == context.packageName || pkg in homePackages) return false
+        if (!isTrackableApp(pkg)) return false
+        val isActivity = activityCache.getOrPut("$pkg/$className") {
+            runCatching {
+                context.packageManager.getActivityInfo(android.content.ComponentName(pkg, className), 0)
+                true
+            }.getOrDefault(false)
+        }
+        return !isActivity
+    }
+
     fun onForegroundPackage(pkg: String): Boolean {
         // Janela transitória por cima do jogo: nada muda (ver isTransientWindow).
         if (isTransientWindow(pkg)) return _isGameForeground.value

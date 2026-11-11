@@ -1,6 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <!-- Cor do painel do novo ícone (badge escuro azul-marinho), para a camada de fundo do
-         adaptive icon combinar com o "foreground" em vez de aparecer branco à volta dele. -->
-    <color name="ic_launcher_background">#1A2130</color>
-</resources>

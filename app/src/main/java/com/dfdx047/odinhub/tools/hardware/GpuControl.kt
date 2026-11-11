@@ -1,10 +1,7 @@
 package com.dfdx047.odinhub.tools.hardware
 
 /**
- * Como limitar a GPU deste aparelho. Duas implementações:
- *  - [Kgsl]: Adreno (todos os Snapdragon) -- `max_gpuclk` em Hz.
- *  - [MtkGed]: Mali nos Dimensity do Retroid Pocket 4 / 4 Pro (kernel 4.19, gpufreq v1) -- o teto
- *    é um ÍNDICE de OPP em `custom_upbound_gpu_freq` (0 = o mais rápido = sem teto).
+ * Como limitar a GPU do Odin 3 (Adreno 830): [Kgsl] -- `max_gpuclk` em Hz.
  *
  * Os nós de leitura/escrita e as tabelas são passados por quem cria, para isto ser testável sem
  * tocar no sistema de ficheiros.
@@ -51,46 +48,6 @@ sealed class GpuControl {
                 "/sys/class/kgsl/kgsl-3d0/gpu_available_frequencies",
                 "/sys/class/kgsl/kgsl-3d0/devfreq/available_frequencies",
             )
-        }
-    }
-
-    /**
-     * @param oppHzFastestFirst tabela tal como o driver a lista (`gpufreq_opp_dump`: índice 0 =
-     *        mais rápido), em Hz.
-     */
-    class MtkGed(private val oppHzFastestFirst: List<Long>, private val upboundPath: String = UPBOUND_PATH) : GpuControl() {
-        override val availableHz: List<Long> = oppHzFastestFirst.distinct().sorted()
-
-        /** Índice de OPP (0 = mais rápido) para um teto em Hz. */
-        fun indexFor(targetHz: Long): Int? {
-            val snapped = snap(targetHz) ?: return null
-            return oppHzFastestFirst.indexOf(snapped).takeIf { it >= 0 }
-        }
-
-        override fun opFor(targetHz: Long, lockMode: String?): HardwareWriteOp? {
-            val index = indexFor(targetHz) ?: return null
-            // O nó do GED é escrito pelo próprio driver; nunca o trancamos.
-            return HardwareWriteOp("gpu-upbound-opp", upboundPath, index.toString(), lockMode = null, verify = false)
-        }
-
-        override fun expectedValue(targetHz: Long): String? = indexFor(targetHz)?.toString()
-
-        override val busyPath: String = BUSY_PATH
-
-        /** `gpu_utilization` do GED: "loading block idle" -- o primeiro número é a ocupação em %. */
-        override fun parseBusy(raw: String?): Int? =
-            raw?.let { Regex("\\d+").find(it)?.value?.toIntOrNull()?.coerceIn(0, 100) }
-
-        companion object {
-            const val UPBOUND_PATH = "/sys/kernel/ged/hal/custom_upbound_gpu_freq"
-            const val OPP_DUMP_PATH = "/proc/gpufreq/gpufreq_opp_dump"
-            const val BUSY_PATH = "/sys/kernel/ged/hal/gpu_utilization"
-
-            /** `[00] freq = 836000, volt = 75000, ...` (kHz) -> Hz, pela ordem do driver. */
-            fun parseOppDump(raw: String?): List<Long> =
-                raw.orEmpty().lines().mapNotNull { line ->
-                    Regex("freq\\s*=\\s*(\\d+)").find(line)?.groupValues?.get(1)?.toLongOrNull()?.times(1000L)
-                }.filter { it > 0 }
         }
     }
 

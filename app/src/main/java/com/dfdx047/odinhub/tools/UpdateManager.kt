@@ -245,9 +245,20 @@ class UpdateManager @Inject constructor(
         val sources = listOf(apk.absolutePath, apk.absolutePath.replace("/storage/emulated/0/", "/data/media/0/"))
         for (src in sources) {
             if (!src.matches(SAFE_PATH)) continue
-            val cmd = "cp $src $TMP_APK && chmod 644 $TMP_APK && pm install -r $TMP_APK; r=\$?; rm -f $TMP_APK; " +
-                "[ \$r -eq 0 ] && am start -n $pkg/.main.MainActivity"
-            val out = executor.executeAsRoot(cmd).getOrNull().orEmpty()
+            // Lógica composta vai num script e corre com `sh <ficheiro>`: o PServer não executa de
+            // forma fiável cadeias `a && b; c` numa só chamada (regra do projeto).
+            val script = """
+                |#!/system/bin/sh
+                |cp "$src" "$TMP_APK" || exit 1
+                |chmod 644 "$TMP_APK"
+                |pm install -r "$TMP_APK"
+                |r=${'$'}?
+                |rm -f "$TMP_APK"
+                |if [ ${'$'}r -eq 0 ]; then am start -n $pkg/.main.MainActivity; fi
+                |exit ${'$'}r
+                |""".trimMargin()
+            val scriptPath = RootScripts.write(context, "odinhub_update.sh", script).firstOrNull() ?: continue
+            val out = executor.executeAsRoot("sh $scriptPath").getOrNull().orEmpty()
             if (out.contains("Success")) return true
             if (out.contains("INSTALL_FAILED_UPDATE_INCOMPATIBLE")) {
                 _state.value = UpdateState.Failed(

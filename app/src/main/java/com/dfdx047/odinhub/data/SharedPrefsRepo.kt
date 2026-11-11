@@ -36,7 +36,19 @@ class SharedPrefsRepo @Inject constructor(
     val isEnglishFlow: kotlinx.coroutines.flow.StateFlow<Boolean> get() = _isEnglishFlow
 
     var isFirstRun: Boolean get() = prefs.getBoolean("is_first_run", true); set(value) = prefs.edit().putBoolean("is_first_run", value).apply()
-    var selectedThemeIndex: Int get() = prefs.getInt("selected_theme_index", 1); set(value) = prefs.edit().putInt("selected_theme_index", value).apply()
+    /**
+     * Tema escolhido (índice em AvailableThemes). v0.14 renomeou e reordenou os temas: um índice
+     * gravado por uma versão anterior é convertido uma vez (ver migrateLegacyThemeIndex).
+     */
+    var selectedThemeIndex: Int
+        get() {
+            val raw = prefs.getInt("selected_theme_index", 1)
+            if (prefs.getInt("theme_scheme", 1) >= 2) return raw
+            val migrated = if (prefs.contains("selected_theme_index")) com.dfdx047.odinhub.ui.theme.migrateLegacyThemeIndex(raw) else 1
+            prefs.edit().putInt("selected_theme_index", migrated).putInt("theme_scheme", 2).apply()
+            return migrated
+        }
+        set(value) = prefs.edit().putInt("selected_theme_index", value).putInt("theme_scheme", 2).apply()
     var useAmoledBlack: Boolean get() = prefs.getBoolean("use_amoled_black", false); set(value) = prefs.edit().putBoolean("use_amoled_black", value).apply()
     /** Aparência "vidro" por cima do tema (ver ConsoleTheme.glassMode). */
     var useGlass: Boolean
@@ -122,8 +134,20 @@ class SharedPrefsRepo @Inject constructor(
     fun macroNativeBackup(button: String): Int = prefs.getInt("macro_${button}_native_backup", -1)
     fun setMacroNativeBackup(button: String, keyCode: Int) { prefs.edit().putInt("macro_${button}_native_backup", keyCode).commit() }
 
+    // ---- Núcleos e fixação de clocks (perfil GLOBAL; por jogo vivem no AppOverrideEntity) ----
+    /** Núcleos desligados (bit N = cpuN, ver CpuHotplug). 0 = todos ligados. */
+    var offlineCpuMask: Int get() = prefs.getInt("offline_cpu_mask", 0); set(value) = prefs.edit().putInt("offline_cpu_mask", value).apply()
+    /** Clusters/GPU com o clock fixo (piso = teto), ver ClockPin. 0 = tudo livre (governador). */
+    var clockPinMask: Int get() = prefs.getInt("clock_pin_mask", 0); set(value) = prefs.edit().putInt("clock_pin_mask", value).apply()
+    /**
+     * Pisos originais guardados antes de os fixar ("caminho=valor=modo;..."), para os devolver ao
+     * libertar ou no Stock mesmo depois de o processo morrer. commit(): tem de estar em disco
+     * ANTES da escrita no sysfs.
+     */
+    var pinBackup: String? get() = prefs.getString("pin_backup", null); set(value) { prefs.edit().putString("pin_backup", value).commit() }
+
     var activeLimitMode: String get() = prefs.getString("active_limit_mode", "TDP") ?: "TDP"; set(value) = prefs.edit().putString("active_limit_mode", value).apply()
-    /** Slider de TDP. Por omissão o "Triple A" do aparelho atual (15 W no Odin 3, 10 W num Odin 2...). */
+    /** Slider de TDP. Por omissão o "Triple A" do aparelho atual (15 W no Odin 3). */
     var tdpValue: Float get() = prefs.getFloat("tdp_value", TdpProfiles.envelope.tripleA); set(value) = prefs.edit().putFloat("tdp_value", value).apply()
 
     /**
@@ -227,6 +251,7 @@ class SharedPrefsRepo @Inject constructor(
                 metrics = com.dfdx047.odinhub.models.HudConfig.decodeMetrics(prefs.getString("hud_metrics", null)),
                 textScale = prefs.getFloat("hud_text_scale", d.textScale),
                 backgroundOpacity = prefs.getFloat("hud_bg_opacity", d.backgroundOpacity),
+                style = runCatching { com.dfdx047.odinhub.models.HudStyle.valueOf(prefs.getString("hud_style", d.style.name)!!) }.getOrDefault(d.style),
             )
         }
         set(value) {
@@ -237,6 +262,7 @@ class SharedPrefsRepo @Inject constructor(
                 .putString("hud_metrics", com.dfdx047.odinhub.models.HudConfig.encodeMetrics(value.metrics))
                 .putFloat("hud_text_scale", value.textScale)
                 .putFloat("hud_bg_opacity", value.backgroundOpacity)
+                .putString("hud_style", value.style.name)
                 .apply()
             _hudConfigFlow.value = value
         }
