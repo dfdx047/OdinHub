@@ -36,11 +36,16 @@ class DeviceProfilesTest {
 
     @Test
     fun `outros aparelhos ficam genericos e nao suportados`() {
+        // Odin 2 (não o Mini): SoC conhecido (8 Gen 2), mas sem perfil oficial nem guarda de pisos.
         val odin2 = DeviceProfiles.detect(id("Odin2", soc = "QCS8550", platform = "kalama"))
         assertFalse(odin2.official)
-        assertEquals(SocFamily.UNKNOWN, odin2.soc)
-        assertFalse(odin2.backButtons)
-        assertNull(odin2.stockGpuMaxMHz)
+        assertEquals(SocFamily.KALAMA, odin2.soc)
+        assertFalse(odin2.guardFirmwareFloors)
+
+        val unknown = DeviceProfiles.detect(id("Toaster", soc = "XYZ1", platform = "nope", manufacturer = "Other"))
+        assertFalse(unknown.official)
+        assertEquals(SocFamily.UNKNOWN, unknown.soc)
+        assertNull(unknown.stockGpuMaxMHz)
 
         val rp5 = DeviceProfiles.detect(id("Retroid Pocket 5", soc = "SM8250", platform = "kona", manufacturer = "Retroid"))
         assertFalse(rp5.official)
@@ -50,6 +55,21 @@ class DeviceProfilesTest {
         val other = DeviceProfiles.detect(id("Phone", soc = "SM8750", manufacturer = "Other"))
         assertFalse(other.official)
         assertEquals(SocFamily.SM8750, other.soc)
+    }
+
+    @Test
+    fun `Odin 2 Mini pelo MODEL lido no aparelho`() {
+        // Build.MODEL = "Odin2 Mini", ro.soc.model = "QCS8550", ro.board.platform = "kalama" (fw 1.0.0.117).
+        val p = DeviceProfiles.detect(id("Odin2 Mini", soc = "QCS8550", platform = "kalama"))
+        assertEquals(DeviceProfiles.ODIN2_MINI, p)
+        assertTrue(p.official)
+        assertFalse(p.backButtons)
+        assertTrue(p.guardFirmwareFloors)
+        assertEquals(SocFamily.KALAMA, p.soc)
+        assertEquals(com.dfdx047.odinhub.ui.theme.VITA_THEME_INDEX, p.defaultThemeIndex)
+        assertEquals(692, p.stockGpuMaxMHz)
+        assertEquals(692, p.fallbackTables.gpuMHz.last())
+        assertEquals(2016, p.fallbackTables.effMHz.last())
     }
 
     @Test

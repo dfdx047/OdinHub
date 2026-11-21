@@ -570,6 +570,40 @@ fun PerformancePanel(uiState: MainUiModel, viewModel: MainViewModel, theme: Cons
             }
         }
 
+        // Perfis guardados: o mesmo conjunto (modo, TDP/clocks, fixação, núcleos, ventoinha)
+        // aplicado com um toque, com o ATIVO destacado; também se ligam a jogos (overlay / regras por app).
+        ConsoleSectionHeader(if (isEn) "Saved Profiles" else "Perfis Guardados", theme)
+        ConsoleCard(
+            if (isEn) "Performance profiles" else "Perfis de desempenho",
+            if (isEn) "Tap to apply · hold to update or delete · link one to a game in the overlay or in Per-App rules"
+            else "Toque para aplicar · segure para atualizar ou apagar · ligue um a um jogo no overlay ou nas regras por app",
+            theme,
+        ) {
+            var actionsFor by remember { mutableStateOf<com.dfdx047.odinhub.data.CustomProfile?>(null) }
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                val activeName = uiState.activeProfileName ?: uiState.customProfiles.firstOrNull {
+                    it.matches(uiState.activeLimitMode, uiState.tdpProfileId, uiState.tdpValue, uiState.cpuPerfClock, uiState.cpuPrimeClock, uiState.gpuClock, uiState.cpuEffClock, uiState.clockPinMask, uiState.offlineCpuMask, uiState.fanMode)
+                }?.name
+                ActiveProfileBanner(activeName, theme, isEn, if (isEn) "Global profile (games without their own rule)" else "Perfil global (jogos sem regra própria)")
+                SavedProfileGrid(
+                    profiles = uiState.customProfiles,
+                    activeName = activeName,
+                    theme = theme, isEn = isEn,
+                    onApply = { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove); viewModel.applySavedProfile(it.name); playClick() },
+                    onLongPress = { haptic.performHapticFeedback(HapticFeedbackType.LongPress); actionsFor = it },
+                )
+                SaveProfileRow(theme, isEn) { viewModel.saveCurrentAsProfile(it); playClick() }
+            }
+            actionsFor?.let { p ->
+                ProfileActionsDialog(
+                    p, theme, isEn,
+                    onUpdate = { viewModel.saveCurrentAsProfile(p.name) },
+                    onDelete = { viewModel.deleteSavedProfile(p.name) },
+                    onDismiss = { actionsFor = null },
+                )
+            }
+        }
+
         ConsoleSectionHeader(if (isEn) "Fan Control" else "Controle de Ventoinha", theme)
         Row(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(theme.scrim).border(1.dp, theme.text.copy(alpha = 0.1f), RoundedCornerShape(8.dp)).padding(4.dp), horizontalArrangement = Arrangement.SpaceBetween) {
             // Usa os settingsValue reais de FanMode (1/4/5) em vez de índices 0/1/2 escritos à
@@ -624,8 +658,8 @@ fun PerformancePanel(uiState: MainUiModel, viewModel: MainViewModel, theme: Cons
 
         ConsoleSectionHeader(if (isEn) "Hardware Limitation Mode" else "Modo de Limitação de Hardware", theme)
         Row(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(theme.scrim).border(1.dp, theme.text.copy(alpha = 0.1f), RoundedCornerShape(12.dp)).padding(4.dp)) {
-            Box(modifier = Modifier.weight(1f).clip(RoundedCornerShape(8.dp)).background(if (isTdpMode) theme.primary.copy(alpha = 0.8f) else Color.Transparent).clickable { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove); viewModel.updateLimitMode("TDP"); playClick() }.padding(vertical = 12.dp), contentAlignment = Alignment.Center) { Text(if (isEn) "Lock by TDP" else "Limitar por TDP", color = if (isTdpMode) theme.onPrimary else theme.text.copy(alpha=0.6f), fontWeight = FontWeight.Bold, fontFamily = theme.fontFamily) }
-            Box(modifier = Modifier.weight(1f).clip(RoundedCornerShape(8.dp)).background(if (isClockMode) theme.primary.copy(alpha = 0.8f) else Color.Transparent).clickable { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove); viewModel.updateLimitMode("CLOCK"); playClick() }.padding(vertical = 12.dp), contentAlignment = Alignment.Center) { Text(if (isEn) "Lock by Clocks" else "Limitar por Clocks", color = if (isClockMode) theme.onPrimary else theme.text.copy(alpha=0.6f), fontWeight = FontWeight.Bold, fontFamily = theme.fontFamily) }
+            LimitModeSegment(isTdpMode, if (isEn) "Lock by TDP" else "Limitar por TDP", theme, Modifier.weight(1f)) { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove); viewModel.updateLimitMode("TDP"); playClick() }
+            LimitModeSegment(isClockMode, if (isEn) "Lock by Clocks" else "Limitar por Clocks", theme, Modifier.weight(1f)) { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove); viewModel.updateLimitMode("CLOCK"); playClick() }
         }
 
         // Os DOIS cartões ficam sempre visíveis; o do modo inativo é desenhado com
@@ -636,14 +670,13 @@ fun PerformancePanel(uiState: MainUiModel, viewModel: MainViewModel, theme: Cons
             enabled = isTdpMode,
             tdpProfileId = uiState.tdpProfileId,
             tdpValue = uiState.tdpValue,
-            customProfiles = uiState.customProfiles,
+            customProfiles = emptyList(),
             autoTdp = uiState.autoTdp,
             theme = theme,
             isEn = isEn,
             onSelectProfile = { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove); viewModel.selectTdpProfile(it); playClick() },
             onSelectCustomProfile = { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove); viewModel.selectCustomTdpProfile(it); playClick() },
             onSliderChange = { viewModel.updateTdp(it) },
-            onSavePreset = { name, watts -> viewModel.saveCustomProfile(name, "TDP", watts, 0f, 0f, 0f) },
         )
 
         ManualClockCard(
@@ -654,11 +687,10 @@ fun PerformancePanel(uiState: MainUiModel, viewModel: MainViewModel, theme: Cons
             primeMHz = uiState.cpuPrimeClock,
             effMHz = uiState.cpuEffClock,
             gpuMHz = uiState.gpuClock,
-            customProfiles = uiState.customProfiles,
+            customProfiles = emptyList(),
             theme = theme,
             isEn = isEn,
             onClocks = { perf, prime, gpu, eff -> haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove); viewModel.updateManualClocks(perf, prime, gpu, eff); playClick() },
-            onSavePreset = { name, perf, prime, gpu, eff -> viewModel.saveCustomProfile(name, "CLOCK", 0f, perf, prime, gpu, eff) },
             pinMask = uiState.clockPinMask,
             clusterKinds = viewModel.cpuClusters.map { it.kind },
             onPinChange = { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove); viewModel.updateClockPinMask(it); playClick() },
@@ -1294,4 +1326,23 @@ fun ConsoleRemapDialog(initialValue: Int, theme: ConsoleTheme, isEn: Boolean, on
         }
     }
     LaunchedEffect(Unit) { focusRequester.requestFocus() }
+}
+/** Metade do seletor TDP/Clocks: o modo ativo é preenchido, com borda e "✓" -- inconfundível. */
+@Composable
+private fun LimitModeSegment(selected: Boolean, label: String, theme: ConsoleTheme, modifier: Modifier, onClick: () -> Unit) {
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (selected) theme.primary else Color.Transparent)
+            .border(if (selected) 2.dp else 0.dp, if (selected) theme.text.copy(alpha = 0.85f) else Color.Transparent, RoundedCornerShape(8.dp))
+            .clickable { onClick() }
+            .padding(vertical = 12.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            if (selected) "✓  $label" else label,
+            color = if (selected) theme.onPrimary else theme.text.copy(alpha = 0.55f),
+            fontWeight = FontWeight.Bold, fontFamily = theme.fontFamily,
+        )
+    }
 }

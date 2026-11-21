@@ -137,6 +137,31 @@ fun AppOverridesScreen(
             item { Text("⚡ PERFORMANCE & HARDWARE", color = theme.text, fontWeight = FontWeight.Black, fontSize = 14.sp, letterSpacing = 1.sp) }
 
             item {
+                // Perfil guardado ligado ao jogo: com ele, o jogo segue SEMPRE os valores atuais
+                // do perfil (editar o perfil muda todos os jogos ligados).
+                val linked = uiState.profileName
+                AppOverrideCard(
+                    title = if (isEn) "Linked profile" else "Perfil ligado",
+                    subtitle = linked ?: (if (isEn) "None -- this game's own settings below" else "Nenhum -- ajustes próprios abaixo"),
+                    enabled = true, onClick = null, theme = theme,
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        com.dfdx047.odinhub.ui.screens.SavedProfileGrid(
+                            profiles = uiState.profiles, activeName = linked, theme = theme, isEn = isEn,
+                            onApply = { tap(); viewModel.linkProfile(if (it.name == linked) null else it.name) },
+                        )
+                        if (linked != null) {
+                            Text(
+                                if (isEn) "Tap the active profile again to unlink. Changing TDP, clocks, cores or fan below also unlinks it."
+                                else "Toque de novo no perfil ativo para desligar. Mudar TDP, clocks, núcleos ou ventoinha abaixo também o desliga.",
+                                color = mutedText, fontSize = 11.sp,
+                            )
+                        }
+                    }
+                }
+            }
+
+            item {
                 // TDP e Clocks são MUTUAMENTE EXCLUSIVOS -- o mesmo modelo do overlay e do ecrã
                 // principal: o jogo usa OU um limite de TDP (que conduz CPU+GPU) OU clocks fixos.
                 AppOverrideCard(title = if (isEn) "Limit Mode" else "Modo de Limite", subtitle = if (isTdpMode) "TDP" else (if (isEn) "Manual Clocks" else "Clocks Manuais"), enabled = true, onClick = null, theme = theme) {

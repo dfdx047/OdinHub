@@ -4,6 +4,43 @@ Each version is listed in English, then in Portuguese. `scripts/release.sh` publ
 
 Cada versão aparece em inglês e depois em português. O `scripts/release.sh` publica a seção da versão que está sendo lançada como notas da release no GitHub.
 
+## v0.15 — Odin 2 Mini
+
+> Odin Hub now also supports the **AYN Odin 2 Mini**. On the Odin 3 it installs over v0.14 and keeps your settings, profiles and per-game rules.
+
+### New
+
+- **AYN Odin 2 Mini support** (Snapdragon 8 Gen 2). Clock tables for its three CPU clusters and the Adreno 740, TDP profiles (Power Save 4.5 W, Balanced 6.5 W, Triple A 9 W, slider up to 12 W), CPU cores on/off and the thermal limit, tested on the device (firmware 1.0.0.117). On this device Odin Hub uses root through KernelSU, because SELinux blocks apps from PServerBinder there. The M1/M2 options are hidden, since the device has no rear buttons.
+- **Odin 2 Mini: the firmware can no longer undo your settings.** AYN's `pservice` rewrote the CPU and GPU caps *and* floors every time the performance mode changed. Outside Stock, Odin Hub now sets its values and makes those nodes read-only; Stock hands them back to the firmware.
+- **Bubble Blue theme**, inspired by the PS Vita home screen. It is the default on the Odin 2 Mini.
+- **Profiles you can trust at a glance.** The profile in use is marked **✓ ACTIVE**, even when you applied the same values by hand or saved the profile before this version. Link a profile to a game, in the overlay or in per-game rules, and it is applied every time the game opens; updating the profile updates every game linked to it.
+- **Selected options stand out.** The TDP / Clocks mode, the TDP profile and the clock chips are filled, outlined and marked with ✓. While Clock mode is on, the remembered TDP profile is only outlined, so it no longer looks half-selected. In the overlay, each clock row scrolls to the selected frequency.
+- **HUD on one straight line.** The horizontal bar never wraps to a second line any more: the window takes the exact width of the metrics and stays on screen when you drag it to an edge. This also fixes the jumps while dragging it.
+- **Active profile in the HUD:** new optional **Profile** metric (System group) shows the profile in use, the game's linked profile or "Manual".
+- **A small HUD stays usable.** The minimum size is now 0.8× (it was 0.6×), and the HUD keeps a 40 dp touch area, so a tiny HUD in a corner can still be grabbed.
+- **Calmer sound.** The menu music is softer and the UI sounds are subtler. On update, a music volume above 25 % and an effects volume above 35 % are lowered to those values once; a lower volume you chose is kept.
+
+### Fixes
+
+- The overlay now shows which global profile a game follows when the game has no rule of its own.
+- Turning a CPU core back on no longer leaves its cluster capped at an old frequency.
+- Saved clocks from another device or an older version snap to the nearest frequency this device supports.
+
+### Português
+
+> O Odin Hub agora também suporta o **AYN Odin 2 Mini**. No Odin 3 ele instala por cima da v0.14 e mantém suas configurações, perfis e regras por jogo.
+
+- **Suporte ao AYN Odin 2 Mini** (Snapdragon 8 Gen 2). Tabelas de clock dos três clusters da CPU e da Adreno 740, perfis de TDP (Economia 4,5 W, Equilibrado 6,5 W, Triple A 9 W, slider até 12 W), núcleos da CPU liga/desliga e limite térmico, testados no aparelho (firmware 1.0.0.117). Nesse aparelho o Odin Hub usa root pelo KernelSU, porque o SELinux bloqueia o PServerBinder para os apps. As opções de M1/M2 ficam escondidas, porque o aparelho não tem botões traseiros.
+- **Odin 2 Mini: o firmware não desfaz mais os seus ajustes.** O `pservice` da AYN reescrevia os limites *e* os pisos da CPU e da GPU a cada troca de modo de desempenho. Fora do Stock, o Odin Hub agora aplica os seus valores e deixa esses nós só de leitura; o Stock devolve-os ao firmware.
+- **Tema Azul Bolha**, inspirado na tela inicial do PS Vita. É o padrão no Odin 2 Mini.
+- **Perfis que dá para confiar só de olhar.** O perfil em uso fica marcado com **✓ ATIVO**, mesmo quando você aplicou os mesmos valores à mão ou salvou o perfil antes desta versão. Ligue um perfil a um jogo, no overlay ou nas regras por jogo, e ele é aplicado sempre que o jogo abrir; atualizar o perfil atualiza todos os jogos ligados a ele.
+- **As opções escolhidas se destacam.** O modo TDP / Clocks, o perfil de TDP e os chips de clock ficam preenchidos, com borda e ✓. Com o modo Clocks ligado, o perfil de TDP guardado fica só contornado, sem parecer meio selecionado. No overlay, cada linha de clock rola até a frequência escolhida.
+- **HUD numa linha reta.** A barra horizontal não quebra mais para uma segunda linha: a janela tem a largura exata das métricas e fica dentro da tela quando você a arrasta até uma borda. Isso também acaba com os saltos ao arrastar.
+- **Perfil ativo no HUD:** nova métrica opcional **Perfil** (grupo Sistema), que mostra o perfil em uso, o ligado ao jogo ou "Manual".
+- **HUD pequeno continua usável.** O tamanho mínimo agora é 0,8× (era 0,6×), e o HUD mantém uma área de toque de 40 dp, para um HUD pequenino num canto ainda dar para pegar.
+- **Som mais calmo.** A música do menu está mais suave e os sons da interface mais discretos. Na atualização, um volume de música acima de 25 % e de efeitos acima de 35 % descem para esses valores uma vez; um volume mais baixo que você escolheu fica como está.
+- **Correções:** o overlay mostra qual perfil global um jogo segue quando ele não tem regra própria; religar um núcleo da CPU não deixa mais o cluster preso numa frequência antiga; clocks salvos de outro aparelho ou de uma versão antiga vão para a frequência mais próxima que o aparelho suporta.
+
 ## v0.14 — Odin 3 edition
 
 > **Odin 3 only.** From this version on, Odin Hub supports the AYN Odin 3 only. If you use it on an Odin 2, Thor or Retroid Pocket, stay on v0.13 and skip this update. On the Odin 3 it installs over v0.11, v0.12 or v0.13 and keeps your settings and per-game rules.

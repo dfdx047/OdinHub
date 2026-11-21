@@ -5,7 +5,7 @@
 <h1 align="center">Odin Hub</h1>
 
 <p align="center">
-  Uma central de controle de hardware e desempenho, com cara de console, para o <b>AYN Odin 3</b>.<br>
+  Uma central de controle de hardware e desempenho, com cara de console, para o <b>AYN Odin 3</b> e o <b>AYN Odin 2 Mini</b>.<br>
   Feito por <b>dfdx047</b>.
 </p>
 
@@ -15,8 +15,8 @@
 
 <p align="center">
   <a href="https://github.com/dfdx047/OdinHub/releases"><img src="https://img.shields.io/github/v/release/dfdx047/OdinHub?include_prereleases&label=download&style=for-the-badge" alt="Última versão"></a>
-  <img src="https://img.shields.io/badge/aparelho-AYN%20Odin%203-e5002b?style=for-the-badge" alt="AYN Odin 3">
-  <img src="https://img.shields.io/badge/root-n%C3%A3o%20precisa-2ea44f?style=for-the-badge" alt="Não precisa de root">
+  <img src="https://img.shields.io/badge/aparelho-AYN%20Odin%203%20%7C%20Odin%202%20Mini-e5002b?style=for-the-badge" alt="AYN Odin 3 e Odin 2 Mini">
+  <img src="https://img.shields.io/badge/root-n%C3%A3o%20precisa%20no%20Odin%203-2ea44f?style=for-the-badge" alt="Não precisa de root no Odin 3">
 </p>
 
 <p align="center">
@@ -91,7 +91,7 @@ Mude um jogo num lugar e o outro reflete. Não existe uma segunda fonte de verda
 - **Salvar como perfil global**: um botão no overlay e nas regras por jogo copia os ajustes atuais para o perfil global; **Usar o global** apaga a regra própria do jogo.
 - **Limite térmico**: opcionalmente, mude os primeiros pontos de throttling passivo das zonas térmicas da CPU/GPU (85 / 90 / 95 °C ou sem limite), no global ou por jogo. É escrito pelo PServerBinder como todo o resto, sem precisar de KernelSU/Magisk. Os pontos de emergência e os **da ventoinha** nunca são mexidos, e o Stock restaura os valores de fábrica (o backup é ligado ao boot atual, então nunca "restaura" um valor já modificado).
 - **Controle da ventoinha**: Stock, Silencioso, Inteligente e Sport, ligados aos modos reais da ventoinha do Odin 3, mais uma **curva de ventoinha personalizada**: arraste os pontos num gráfico (ou afine pelo D-pad), siga a CPU, a GPU ou a mais quente das duas, veja a temperatura e a velocidade ao vivo e rode testes de stress da CPU e da GPU. A partir de 90 °C a ventoinha vai sempre a 100 %.
-- **Perfis personalizados**: salve os seus próprios presets de TDP ou de clocks com um nome.
+- **Perfis salvos**: salve os ajustes atuais (TDP ou clocks, fixação, núcleos e ventoinha) como um perfil com nome, por exemplo "Game Boy Advance". O perfil em uso fica sempre marcado com **✓ ATIVO**, mesmo quando você coloca os mesmos valores à mão. Ligue um perfil a um jogo no overlay ou nas regras por jogo e ele é aplicado sempre que o jogo abrir; editar o perfil atualiza todos os jogos ligados a ele.
 
 ### Tela
 - Saturação (0–2×) e temperatura de cor (4000–9000 K, mais quente ou mais fria), aplicadas ao vivo pela própria transformação de cor do SurfaceFlinger.
@@ -108,7 +108,7 @@ Mude um jogo num lugar e o outro reflete. Não existe uma segunda fonte de verda
 - **Controlado de dentro do jogo**: a aba **HUD** do overlay lateral liga e desliga o HUD e muda predefinições, métricas, layout, estilo, posição, tamanho e fundo, com as mudanças em tempo real.
 - Segue o tema do app, incluindo o modo vidro. **Dois toques escondem o HUD**; ele volta pelo overlay lateral, pelo gesto do Home "Mostrar/esconder HUD de desempenho" ou pelas Configurações.
 - Leve: tudo é lido direto do sysfs (o uso da CPU vem do tempo ocioso dos núcleos); só o FPS / frame time precisa de uma chamada ao PServerBinder por segundo. A leitura para enquanto o HUD está escondido ou a tela está desligada.
-- A janela cresce quando você adiciona métricas, e a barra horizontal quebra para uma segunda linha em vez de sair da tela.
+- A barra horizontal fica sempre numa **linha única e reta**, do tamanho das métricas, e nunca sai da tela quando você a arrasta. A métrica opcional **Perfil ativo** mostra o perfil em uso (o ligado ao jogo, o global ou "Manual").
 
 ### Interface
 - **Aparência de vidro**: um modo estilo Liquid Glass que funciona por cima de qualquer tema, com superfícies translúcidas e borda de luz; o overlay lateral também desfoca o jogo por trás quando o sistema permite.
@@ -117,28 +117,31 @@ Mude um jogo num lugar e o outro reflete. Não existe uma segunda fonte de verda
 - Navegável pelo D-pad, com vibração e brilho de foco.
 - Animação de boot, papéis de parede personalizados e um mixer de música de fundo e efeitos sonoros.
 
-## Aparelho suportado
+## Aparelhos suportados
 
-O Odin Hub é feito só para o **AYN Odin 3** (Snapdragon 8 Elite, 6 + 2 núcleos Oryon, Adreno 830). As tabelas de clock, as zonas térmicas, o controle da GPU e os perfis de TDP são ajustados para ele e foram testados no próprio aparelho (firmware 1.0.0.188).
+O Odin Hub suporta o **AYN Odin 3** e o **AYN Odin 2 Mini**. Ele detecta o aparelho sozinho; as tabelas de clock, as zonas térmicas, o controle da GPU e os perfis de TDP são ajustados para cada um e foram testados nos próprios aparelhos.
 
-| | Odin 3 |
-|---|---|
-| SoC | Snapdragon 8 Elite (SM8750) |
-| CPU | 6 núcleos Oryon (cpu0-5) + 2 núcleos Prime (cpu6-7) |
-| Controle da GPU | Adreno 830 (kgsl), até 1100 MHz |
-| Limite térmico | ✓ |
-| M1 / M2 | ✓ |
-| Perfis de TDP (Economia / Equilibrado / Triple A / máx. do slider) | 7 / 10 / 15 / 25 W |
+| | Odin 3 | Odin 2 Mini |
+|---|---|---|
+| SoC | Snapdragon 8 Elite (SM8750) | Snapdragon 8 Gen 2 (QCS8550) |
+| CPU | 6 núcleos Oryon (cpu0-5) + 2 núcleos Prime (cpu6-7) | 3× A510 (cpu0-2) + 2× A715 / 2× A710 (cpu3-6) + 1× X3 (cpu7) |
+| Controle da GPU | Adreno 830 (kgsl), até 1100 MHz | Adreno 740 (kgsl), até 692 MHz |
+| Limite térmico | ✓ | ✓ |
+| M1 / M2 | ✓ | — (o aparelho não tem botões traseiros) |
+| Perfis de TDP (Economia / Equilibrado / Triple A / máx. do slider) | 7 / 10 / 15 / 25 W | 4,5 / 6,5 / 9 / 12 W |
+| Root | Não precisa (PServerBinder) | **KernelSU** (ou outro `su`) |
+| Firmware testado | 1.0.0.188 | 1.0.0.117 |
 
 Notas:
 
 - Os valores de TDP são o consumo do aparelho inteiro na bateria. Os degraus são bem separados de propósito, para os perfis fazerem diferença de verdade; ajuste a gosto com o slider.
 - O firmware sobe a frequência mínima de cada cluster conforme o seu próprio modo de desempenho (perf HAL, `msm_performance`). Quando um limite fica abaixo desse piso, o Odin Hub baixa o piso também, para o limite valer de verdade, e o app mostra o motivo quando não consegue.
-- Outros aparelhos (Odin 2, Thor, Retroid Pocket) deixaram de ser suportados. Neles, use a v0.13.
+- **Odin 2 Mini:** o `pservice` da AYN reescreve os limites *e* os pisos da CPU e da GPU a cada troca de modo de desempenho. Fora do Stock, o Odin Hub aplica os seus valores e deixa esses nós só de leitura, para o firmware não pôr os dele por cima; o Stock devolve-os ao firmware. O aparelho tem um tema próprio (**Azul Bolha**) numa instalação nova.
+- Outros aparelhos (Odin 2, Thor, Retroid Pocket) não são suportados. Neles, use a v0.13.
 
 ## Como ele fala com o hardware
 
-O Odin Hub não roda `su` e não precisa de KernelSU/Magisk. Ele usa um auxiliar privilegiado que já existe no aparelho, o `PServerBinder`, que roda como root, através de `IBinder.transact()`, uma técnica criada pelo **ClusterTune** e pelo **P.U.L.S.E.** (veja os Créditos). Por esse canal ele escreve em nós do `sysfs` e nas configurações do sistema Android.
+No Odin 3, o Odin Hub não roda `su` e não precisa de KernelSU/Magisk. Ele usa um auxiliar privilegiado que já existe no aparelho, o `PServerBinder`, que roda como root, através de `IBinder.transact()`, uma técnica criada pelo **ClusterTune** e pelo **P.U.L.S.E.** (veja os Créditos). Por esse canal ele escreve em nós do `sysfs` e nas configurações do sistema Android. No Odin 2 Mini, o SELinux bloqueia o acesso dos apps a esse auxiliar, então o Odin Hub usa uma sessão `su` persistente (dê root a ele no KernelSU).
 
 Duas consequências que vale a pena saber:
 
@@ -149,8 +152,8 @@ A detecção do app em primeiro plano usa um serviço de acessibilidade, com uma
 
 ## Requisitos
 
-- Um AYN Odin 3.
-- O `PServerBinder` disponível no aparelho (vem no firmware original da AYN).
+- Um AYN Odin 3 ou AYN Odin 2 Mini.
+- Odin 3: o `PServerBinder` disponível no aparelho (vem no firmware original da AYN). Odin 2 Mini: root pelo KernelSU (ou outro `su`), concedido ao Odin Hub.
 - Permissões concedidas na primeira abertura: **Acesso ao uso** (detecção do app em primeiro plano) e **Sobrepor a outros apps** (o overlay no jogo).
 
 ## Instalação

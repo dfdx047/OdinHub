@@ -55,6 +55,7 @@ class AppOverrideMapper @Inject constructor(
      */
     private fun subtitleFor(app: AppOverrideEntity, isEn: Boolean): String {
         val parts = mutableListOf<String>()
+        app.profileName?.let { parts += (if (isEn) "Profile: " else "Perfil: ") + it }
         if (app.limitMode == "TDP") {
             app.tdpWatts?.let { w ->
                 parts += "TDP " + if (TdpProfiles.isStockWatts(w)) "Stock" else TdpProfiles.formatWatts(w)

@@ -68,6 +68,8 @@ data class MainUiModel(
     val firmwareFloors: Map<com.dfdx047.odinhub.tools.hardware.ClusterKind, Int> = emptyMap(),
     val fanMode: Int = 0,
     val customProfiles: List<CustomProfile> = emptyList(),
+    /** Perfil guardado aplicado agora no perfil global (null = ajustes soltos). */
+    val activeProfileName: String? = null,
 
     val globalLsfgEnabled: Boolean = false,
     val globalSgsrEnabled: Boolean = false,
@@ -85,7 +87,7 @@ data class MainUiModel(
     val overlayHandleWidth: Int = 22,
 
     val bgmEnabled: Boolean = true,
-    val bgmVolume: Float = 0.5f,
+    val bgmVolume: Float = 0.25f,
     val sfxEnabled: Boolean = true,
-    val sfxVolume: Float = 0.8f
+    val sfxVolume: Float = 0.35f
 )

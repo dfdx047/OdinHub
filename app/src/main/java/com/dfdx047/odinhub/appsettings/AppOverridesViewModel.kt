@@ -8,6 +8,7 @@ import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import com.dfdx047.odinhub.data.AppOverrideEntity
+import com.dfdx047.odinhub.data.resolvedWith
 import com.dfdx047.odinhub.data.AppOverrideRepository
 import com.dfdx047.odinhub.data.SharedPrefsRepo
 import com.dfdx047.odinhub.models.AppOverrideLabels
@@ -75,6 +76,9 @@ data class AppOverrideUiState(
     val offlineCpuMask: Int? = null,
     /** Clusters/GPU com clock fixo neste jogo (ver ClockPin); `null` = segue o global. */
     val clockPinMask: Int? = null,
+    /** Perfil guardado ligado a este jogo (ver AppOverrideEntity.profileName); `null` = ajustes próprios. */
+    val profileName: String? = null,
+    val profiles: List<com.dfdx047.odinhub.data.CustomProfile> = emptyList(),
 
     val isSaved: Boolean = false,
     val availableReshadeProfiles: List<String> = listOf("Native", "Vibrant", "Retro", "HDR Boost", "Game Clarity", "Cinematic"),
@@ -152,6 +156,40 @@ class AppOverrideViewModel @Inject constructor(
 
         loadAppDetails(packageName)
         observeOverride(packageName)
+        viewModelScope.launch { prefs.customProfilesFlow.collect { list -> _uiState.update { it.copy(profiles = list) } } }
+    }
+
+    /**
+     * Liga (ou desliga, com `null`) um perfil guardado a este jogo. Os campos de desempenho do
+     * ecrã passam a mostrar os valores do perfil; ao guardar, o jogo segue o perfil sempre.
+     */
+    fun linkProfile(name: String?) {
+        markEdited()
+        val p = prefs.customProfile(name)
+        if (p == null) { _uiState.update { it.copy(profileName = null) }; return }
+        _uiState.update { applyProfileValues(it, p).copy(profileName = p.name) }
+    }
+
+    private fun applyProfileValues(s: AppOverrideUiState, p: com.dfdx047.odinhub.data.CustomProfile): AppOverrideUiState {
+        val base = s.copy(
+            limitMode = p.type,
+            offlineCpuMask = p.offlineMask,
+            fanSettingsValue = if (p.fan >= 0) p.fan else s.fanSettingsValue,
+        )
+        return if (p.type == "TDP") base.copy(
+            tdpProfileId = TdpProfiles.idForWatts(p.v1),
+            tdpWatts = if (TdpProfiles.isStockWatts(p.v1)) s.tdpWatts else p.v1,
+        ) else base.copy(
+            perfClockMHz = p.v2, primeClockMHz = p.v3, gpuClockMHz = p.v4,
+            effClockMHz = if (p.v5 > 0f) p.v5 else s.effClockMHz,
+            clockPinMask = p.pinMask,
+        )
+    }
+
+    /** Ajuste manual de desempenho: o jogo deixa de seguir o perfil ligado. */
+    private fun markPerfEdited() {
+        markEdited()
+        if (_uiState.value.profileName != null) _uiState.update { it.copy(profileName = null) }
     }
 
     private fun loadAppDetails(packageName: String) {
@@ -191,7 +229,8 @@ class AppOverrideViewModel @Inject constructor(
         }
     }
 
-    private fun applyEntity(entity: AppOverrideEntity) {
+    private fun applyEntity(raw: AppOverrideEntity) {
+        val entity = raw.resolvedWith(prefs.customProfile(raw.profileName))
         _uiState.update {
             it.copy(
                 limitMode = entity.limitMode,
@@ -225,6 +264,7 @@ class AppOverrideViewModel @Inject constructor(
                 m2MacroSteps = ButtonMacros.decode(entity.m2Macro),
                 offlineCpuMask = entity.offlineCpuMask,
                 clockPinMask = entity.clockPinMask,
+                profileName = raw.profileName,
 
                 isSaved = true
             )
@@ -236,10 +276,10 @@ class AppOverrideViewModel @Inject constructor(
         userHasEdited = true
     }
 
-    fun updateLimitMode(mode: String) { markEdited(); _uiState.update { it.copy(limitMode = mode) } }
+    fun updateLimitMode(mode: String) { markPerfEdited(); _uiState.update { it.copy(limitMode = mode) } }
     /** Slider (1..25 W): o valor é livre e a seleção passa para "custom" (nenhum chip). */
     fun updateTdp(watts: Float) {
-        markEdited()
+        markPerfEdited()
         val clamped = watts.coerceIn(TdpProfiles.TDP_MIN_WATTS, TdpProfiles.TDP_MAX_WATTS)
         _uiState.update { it.copy(tdpWatts = clamped, tdpProfileId = TdpProfiles.ID_CUSTOM) }
     }
@@ -247,18 +287,18 @@ class AppOverrideViewModel @Inject constructor(
     /** Perfil fixo de TdpProfiles: watts exatos do perfil (Stock = sem limite). */
     fun selectTdpProfile(profileId: String) {
         val profile = TdpProfiles.byId(profileId) ?: return
-        markEdited()
+        markPerfEdited()
         _uiState.update { it.copy(tdpProfileId = profile.id, tdpWatts = profile.watts ?: it.tdpWatts) }
     }
 
     /** GPU é sempre passada separadamente -- ver comentário em ClockPresets.kt sobre porquê. */
     fun updateClocks(perfMHz: Float, primeMHz: Float, gpuMHz: Float, effMHz: Float = _uiState.value.effClockMHz) {
+        markPerfEdited()
         _uiState.update { it.copy(effClockMHz = effMHz) }
-        markEdited()
         _uiState.update { it.copy(perfClockMHz = perfMHz, primeClockMHz = primeMHz, gpuClockMHz = gpuMHz) }
     }
 
-    fun updateFanMode(settingsValue: Int) { markEdited(); _uiState.update { it.copy(fanSettingsValue = settingsValue) } }
+    fun updateFanMode(settingsValue: Int) { markPerfEdited(); _uiState.update { it.copy(fanSettingsValue = settingsValue) } }
 
     fun updateLsfg(enabled: Boolean, multiplier: String, framePacing: Boolean, performanceMode: Boolean, quality: Float) {
         markEdited()
@@ -296,11 +336,11 @@ class AppOverrideViewModel @Inject constructor(
 
     /** `null` = segue o global; senão a máscara (já com as regras de segurança do CpuHotplug). */
     fun updateCoreMask(mask: Int?) {
-        markEdited()
+        markPerfEdited()
         val safe = mask?.let { com.dfdx047.odinhub.tools.hardware.CpuHotplug.sanitize(it, possibleCpus.ifEmpty { (0..7).toList() }) }
         _uiState.update { it.copy(offlineCpuMask = safe) }
     }
-    fun updateClockPinMask(mask: Int?) { markEdited(); _uiState.update { it.copy(clockPinMask = mask) } }
+    fun updateClockPinMask(mask: Int?) { markPerfEdited(); _uiState.update { it.copy(clockPinMask = mask) } }
 
     /**
      * Copia os ajustes deste ecrã para o perfil GLOBAL (vale para todos os jogos sem regra
@@ -308,6 +348,7 @@ class AppOverrideViewModel @Inject constructor(
      */
     fun saveAsGlobal() {
         val c = _uiState.value
+        prefs.activeProfileName = c.profileName
         prefs.activeLimitMode = c.limitMode
         prefs.tdpProfileId = c.tdpProfileId
         prefs.tdpValue = c.tdpWatts
@@ -371,6 +412,7 @@ class AppOverrideViewModel @Inject constructor(
                 m2Macro = MacroMode.encode(current.m2MacroMode, current.m2MacroSteps),
                 offlineCpuMask = current.offlineCpuMask,
                 clockPinMask = current.clockPinMask,
+                profileName = current.profileName,
             )
             overrideRepository.upsert(entity)
             _uiState.update { it.copy(isSaved = true) }

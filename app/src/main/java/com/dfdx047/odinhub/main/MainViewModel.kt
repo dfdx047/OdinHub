@@ -275,6 +275,16 @@ class MainViewModel @Inject constructor(
         viewModelScope.launch {
             performanceManager.clockTables.collect { tables ->
                 _uiState.update { it.copy(clockTables = tables) }
+                if (!tables.isEmpty && tables.source != com.dfdx047.odinhub.tools.hardware.ClockTables.SOURCE_FALLBACK) {
+                    val perf = tables.snapTo(prefs.cpuPerfClock, tables.perfMHz)
+                    val prime = tables.snapTo(prefs.cpuPrimeClock, tables.primeMHz)
+                    val gpu = tables.snapTo(prefs.gpuClock, tables.gpuMHz)
+                    val eff = tables.snapTo(prefs.cpuEffClock, tables.effMHz)
+                    if (perf != prefs.cpuPerfClock || prime != prefs.cpuPrimeClock || gpu != prefs.gpuClock || eff != prefs.cpuEffClock) {
+                        prefs.cpuPerfClock = perf; prefs.cpuPrimeClock = prime; prefs.gpuClock = gpu; prefs.cpuEffClock = eff
+                        _uiState.update { it.copy(cpuPerfClock = perf, cpuPrimeClock = prime, gpuClock = gpu, cpuEffClock = eff) }
+                    }
+                }
             }
         }
         viewModelScope.launch {
@@ -302,6 +312,9 @@ class MainViewModel @Inject constructor(
         // Presets guardados no overlay aparecem aqui sem reiniciar a app.
         viewModelScope.launch {
             prefs.customProfilesFlow.collect { list -> _uiState.update { it.copy(customProfiles = list) } }
+        }
+        viewModelScope.launch {
+            prefs.activeProfileFlow.collect { name -> _uiState.update { it.copy(activeProfileName = name) } }
         }
 
         // "AYN Odin 3 detetado": uma vez por aparelho (ou ao trocar de aparelho com backup restaurado).
@@ -333,6 +346,7 @@ class MainViewModel @Inject constructor(
      * aplica de imediato, tal como o overlay já fazia.
      */
     fun updateLimitMode(mode: String) {
+        prefs.activeProfileName = null
         prefs.activeLimitMode = mode
         _uiState.update { it.copy(activeLimitMode = mode) }
         // Uma escrita de slider ainda pendente (janela de debounce) do OUTRO modo não pode chegar
@@ -383,6 +397,7 @@ class MainViewModel @Inject constructor(
      * ver [selectTdpProfile].
      */
     fun updateTdp(watts: Float) {
+        prefs.activeProfileName = null
         val clamped = watts.coerceIn(TdpProfiles.TDP_MIN_WATTS, TdpProfiles.TDP_MAX_WATTS)
         prefs.tdpValue = clamped
         prefs.tdpProfileId = TdpProfiles.ID_CUSTOM
@@ -400,6 +415,7 @@ class MainViewModel @Inject constructor(
      * movido para os watts do perfil só para refletir o que está a ser aplicado.
      */
     fun selectTdpProfile(profileId: String) {
+        prefs.activeProfileName = null
         val profile = TdpProfiles.byId(profileId) ?: return
         prefs.tdpProfileId = profile.id
         profile.watts?.let { prefs.tdpValue = it }
@@ -420,6 +436,7 @@ class MainViewModel @Inject constructor(
     }
 
     fun updateManualClocks(perfClock: Float, primeClock: Float, gpuClock: Float, effClock: Float = _uiState.value.cpuEffClock) {
+        prefs.activeProfileName = null
         prefs.cpuEffClock = effClock
         _uiState.update { it.copy(cpuEffClock = effClock) }
         prefs.cpuPerfClock = perfClock
@@ -445,6 +462,7 @@ class MainViewModel @Inject constructor(
      * launcher todos voltam a ligar, e dentro de um jogo sem regra própria vale esta máscara.
      */
     fun updateCoreMask(mask: Int) {
+        prefs.activeProfileName = null
         val safe = com.dfdx047.odinhub.tools.hardware.CpuHotplug.sanitize(mask, possibleCpus.ifEmpty { (0..7).toList() })
         prefs.offlineCpuMask = safe
         _uiState.update { it.copy(offlineCpuMask = safe) }
@@ -455,6 +473,7 @@ class MainViewModel @Inject constructor(
     fun resetCores() = updateCoreMask(com.dfdx047.odinhub.tools.hardware.CpuHotplug.ALL_ONLINE)
 
     fun updateClockPinMask(mask: Int) {
+        prefs.activeProfileName = null
         prefs.clockPinMask = mask
         _uiState.update { it.copy(clockPinMask = mask) }
         val current = _uiState.value
@@ -477,10 +496,54 @@ class MainViewModel @Inject constructor(
         }
     }
 
-    fun saveCustomProfile(name: String, type: String, val1: Float, val2: Float, val3: Float, val4: Float, val5: Float = 0f) {
-        // O customProfilesFlow (coletado no init) atualiza a lista.
-        prefs.saveCustomProfile(name, type, val1, val2, val3, val4, val5)
+    /**
+     * Guarda o estado global ATUAL como perfil com nome (modo, TDP ou clocks, clocks fixos,
+     * núcleos e ventoinha) e marca-o como ativo -- o que está aplicado É esse perfil.
+     */
+    fun saveCurrentAsProfile(name: String) {
+        val n = name.trim().takeIf { it.isNotEmpty() } ?: return
+        val s = _uiState.value
+        val watts = TdpProfiles.encodeWatts(TdpProfiles.resolveWatts(s.tdpProfileId, s.tdpValue))
+        prefs.saveCustomProfile(
+            n, s.activeLimitMode, watts, s.cpuPerfClock, s.cpuPrimeClock, s.gpuClock, s.cpuEffClock,
+            pinMask = s.clockPinMask, offlineMask = s.offlineCpuMask, fan = s.fanMode.takeIf { m -> FanMode.selectable.any { it.settingsValue == m } } ?: -1,
+        )
+        prefs.activeProfileName = n
     }
+
+    /** Aplica um perfil guardado ao perfil global (e marca-o como ativo). */
+    fun applySavedProfile(name: String) {
+        val p = prefs.customProfile(name) ?: return
+        tdpJob?.cancel()
+        clockJob?.cancel()
+        val safeMask = com.dfdx047.odinhub.tools.hardware.CpuHotplug.sanitize(p.offlineMask, possibleCpus.ifEmpty { (0..7).toList() })
+        prefs.activeLimitMode = p.type
+        prefs.offlineCpuMask = safeMask
+        val stock = p.type == "TDP" && TdpProfiles.isStockWatts(p.v1)
+        val tdpId = if (p.type == "TDP") TdpProfiles.idForWatts(p.v1) else prefs.tdpProfileId
+        val tdpWatts = if (stock) prefs.tdpValue else p.v1
+        if (p.type == "TDP") {
+            prefs.tdpProfileId = tdpId
+            prefs.tdpValue = tdpWatts
+        } else {
+            prefs.cpuPerfClock = p.v2; prefs.cpuPrimeClock = p.v3; prefs.gpuClock = p.v4; prefs.cpuEffClock = p.v5
+            prefs.clockPinMask = p.pinMask
+        }
+        if (p.fan >= 0) prefs.fanMode = p.fan
+        _uiState.update {
+            if (p.type == "TDP") it.copy(activeLimitMode = "TDP", tdpProfileId = tdpId, tdpValue = tdpWatts, offlineCpuMask = safeMask, fanMode = prefs.fanMode)
+            else it.copy(activeLimitMode = "CLOCK", cpuPerfClock = p.v2, cpuPrimeClock = p.v3, gpuClock = p.v4, cpuEffClock = p.v5, clockPinMask = p.pinMask, offlineCpuMask = safeMask, fanMode = prefs.fanMode)
+        }
+        prefs.activeProfileName = p.name
+        clockJob = viewModelScope.launch(Dispatchers.IO) {
+            performanceManager.applyCoreMask(safeMask)
+            if (p.type == "TDP") performanceManager.applyTdpSelection(if (stock) null else p.v1)
+            else performanceManager.applyAbsoluteClocks((p.v2 * 1000).toLong(), (p.v3 * 1000).toLong(), (p.v4 * 1_000_000).toLong(), (p.v5 * 1000).toLong(), p.pinMask)
+            if (p.fan >= 0) performanceManager.applyFanMode(FanMode.fromSettingsValue(p.fan))
+        }
+    }
+
+    fun deleteSavedProfile(name: String) = prefs.deleteCustomProfile(name)
 
     // Limite térmico (root) -- ver ThermalManager. As escritas correm no scope do próprio
     // gestor (IO); aqui só encaminhamos a escolha. O estado volta pelo StateFlow coletado no init.

@@ -7,7 +7,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [AppOverrideEntity::class],
-    version = 9, // v5: limitMode + valores reais de TDP/Clock/Fan; v6: displayOverride + thermalMode; v7: m1Macro/m2Macro; v8: effClockKHz; v9: offlineCpuMask + clockPinMask
+    version = 10, // v10: profileName (perfil ligado ao jogo); v5: limitMode + valores reais de TDP/Clock/Fan; v6: displayOverride + thermalMode; v7: m1Macro/m2Macro; v8: effClockKHz; v9: offlineCpuMask + clockPinMask
     // Antes: exportSchema = false descartava o histórico de schema a cada build -- o plugin
     // `androidx.room` já estava configurado para gravar em `schemas/` (ver bloco `room {}`
     // abaixo), mas isso nunca gerava nada porque o export estava desligado aqui. Com
@@ -133,6 +133,18 @@ abstract class AppDatabase : RoomDatabase() {
                 }
                 if ("offlineCpuMask" !in existing) db.execSQL("ALTER TABLE appoverride ADD COLUMN offlineCpuMask INTEGER")
                 if ("clockPinMask" !in existing) db.execSQL("ALTER TABLE appoverride ADD COLUMN clockPinMask INTEGER")
+            }
+        }
+
+        /** v10 (Odin Hub 0.15): perfil de desempenho ligado ao jogo (ver PerfProfile). */
+        val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                val existing = mutableSetOf<String>()
+                db.query("PRAGMA table_info(appoverride)").use { cursor ->
+                    val nameIndex = cursor.getColumnIndex("name")
+                    while (cursor.moveToNext()) existing += cursor.getString(nameIndex)
+                }
+                if ("profileName" !in existing) db.execSQL("ALTER TABLE appoverride ADD COLUMN profileName TEXT")
             }
         }
     }

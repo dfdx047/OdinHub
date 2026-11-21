@@ -7,8 +7,63 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
-/** Preset do utilizador. TDP: v1 = watts. CLOCK: v2 Perf, v3 Prime, v4 GPU, v5 Eficiência (MHz; 0 = não definido). */
-data class CustomProfile(val name: String, val type: String, val v1: Float, val v2: Float, val v3: Float, val v4: Float, val v5: Float = 0f)
+/**
+ * Perfil de desempenho do utilizador (ex: "Game Boy Advance"). TDP: v1 = watts. CLOCK: v2 Perf,
+ * v3 Prime, v4 GPU, v5 Eficiência (MHz; 0 = não definido). Desde a v0.15 também guarda os clocks
+ * fixos ([pinMask]), os núcleos desligados ([offlineMask]) e a ventoinha ([fan], -1 = não mexe);
+ * perfis antigos ficam com 0/0/-1, ou seja, como funcionavam antes.
+ */
+data class CustomProfile(
+    val name: String, val type: String, val v1: Float, val v2: Float, val v3: Float, val v4: Float, val v5: Float = 0f,
+    val pinMask: Int = 0, val offlineMask: Int = 0, val fan: Int = -1,
+) {
+    /** Resumo curto para os chips ("8.0 W" / "1.4/2.0/2.4 GHz · GPU 401"). */
+    fun summary(isEn: Boolean): String = buildString {
+        if (type == "TDP") append(if (TdpProfiles.isStockWatts(v1)) "Stock" else "%.1f W".format(v1))
+        else {
+            val parts = listOf(v5, v2, v3).filter { it > 0f }.joinToString("/") { "%.1f".format(it / 1000f) }
+            if (parts.isNotEmpty()) append(parts).append(" GHz")
+            if (v4 > 0f) append(if (isNotEmpty()) " · " else "").append("GPU ${v4.toInt()}")
+        }
+        val off = Integer.bitCount(offlineMask)
+        if (off > 0) append(" · ").append(if (isEn) "$off cores off" else "$off núcl. off")
+    }
+
+    /**
+     * Os ajustes aplicados agora SÃO este perfil? (modo, TDP ou clocks e fixação, núcleos e,
+     * se o perfil a define, ventoinha). Serve para o mostrar como ativo mesmo quando foi
+     * aplicado à mão ou antes de a app guardar o nome do perfil ativo (v0.14).
+     */
+    fun matches(
+        mode: String, tdpProfileId: String, tdpValue: Float,
+        perf: Float, prime: Float, gpu: Float, eff: Float, pin: Int, offline: Int, fanMode: Int,
+    ): Boolean {
+        if (type != mode || offlineMask != offline) return false
+        if (fan >= 0 && fan != fanMode) return false
+        return if (type == "TDP") {
+            kotlin.math.abs(TdpProfiles.encodeWatts(TdpProfiles.resolveWatts(tdpProfileId, tdpValue)) - v1) < 0.05f
+        } else {
+            perf == v2 && prime == v3 && gpu == v4 && (v5 <= 0f || eff == v5) && pinMask == pin
+        }
+    }
+}
+
+/**
+ * Valores efetivos de um jogo ligado a um perfil: o perfil manda no modo, TDP/clocks, fixação,
+ * núcleos e (se definida) ventoinha; o resto da regra do jogo (cor, térmico, gráficos) fica.
+ * Perfil apagado = a regra continua com a última cópia que tinha.
+ */
+fun AppOverrideEntity.resolvedWith(profile: CustomProfile?): AppOverrideEntity {
+    if (profile == null || profileName == null) return this
+    val base = copy(offlineCpuMask = profile.offlineMask, fanSettingsValue = if (profile.fan >= 0) profile.fan else fanSettingsValue)
+    return if (profile.type == "TDP") base.copy(limitMode = "TDP", tdpWatts = profile.v1)
+    else base.copy(
+        limitMode = "CLOCK",
+        perfClockKHz = (profile.v2 * 1000).toLong(), primeClockKHz = (profile.v3 * 1000).toLong(),
+        gpuClockHz = (profile.v4 * 1_000_000).toLong(), effClockKHz = if (profile.v5 > 0f) (profile.v5 * 1000).toLong() else effClockKHz,
+        clockPinMask = profile.pinMask,
+    )
+}
 
 @Singleton
 class SharedPrefsRepo @Inject constructor(
@@ -42,7 +97,18 @@ class SharedPrefsRepo @Inject constructor(
      */
     var selectedThemeIndex: Int
         get() {
-            val raw = prefs.getInt("selected_theme_index", 1)
+            // Tema exclusivo do aparelho (Odin 2 Mini: "Azul Bolha"), aplicado UMA vez por
+            // aparelho -- também numa instalação que já tinha outro tema. Depois disso o
+            // utilizador escolhe à vontade.
+            val device = com.dfdx047.odinhub.tools.DeviceRegistry.current
+            val flag = "device_theme_applied_" + device.id
+            if (!prefs.getBoolean(flag, false)) {
+                val edit = prefs.edit().putBoolean(flag, true)
+                if (device.defaultThemeIndex != 1) edit.putInt("selected_theme_index", device.defaultThemeIndex).putInt("theme_scheme", 2)
+                edit.apply()
+                if (device.defaultThemeIndex != 1) return device.defaultThemeIndex
+            }
+            val raw = prefs.getInt("selected_theme_index", device.defaultThemeIndex)
             if (prefs.getInt("theme_scheme", 1) >= 2) return raw
             val migrated = if (prefs.contains("selected_theme_index")) com.dfdx047.odinhub.ui.theme.migrateLegacyThemeIndex(raw) else 1
             prefs.edit().putInt("selected_theme_index", migrated).putInt("theme_scheme", 2).apply()
@@ -73,9 +139,26 @@ class SharedPrefsRepo @Inject constructor(
     var overlayShortcutKeyCode: Int get() = prefs.getInt("overlay_shortcut_keycode", 0); set(value) = prefs.edit().putInt("overlay_shortcut_keycode", value).apply()
 
     var bgmEnabled: Boolean get() = prefs.getBoolean("bgm_enabled", true); set(value) = prefs.edit().putBoolean("bgm_enabled", value).apply()
-    var bgmVolume: Float get() = prefs.getFloat("bgm_volume", 0.5f); set(value) = prefs.edit().putFloat("bgm_volume", value).apply()
+    /** Música do menu: 25 % por omissão (a faixa também foi abafada/acalmada na v0.15). */
+    var bgmVolume: Float get() = migrateAudio().getFloat("bgm_volume", DEFAULT_BGM_VOLUME); set(value) = prefs.edit().putFloat("bgm_volume", value).apply()
     var sfxEnabled: Boolean get() = prefs.getBoolean("sfx_enabled", true); set(value) = prefs.edit().putBoolean("sfx_enabled", value).apply()
-    var sfxVolume: Float get() = prefs.getFloat("sfx_volume", 0.8f); set(value) = prefs.edit().putFloat("sfx_volume", value).apply()
+    /** Efeitos da UI: só presença, nunca intrusivos. */
+    var sfxVolume: Float get() = migrateAudio().getFloat("sfx_volume", DEFAULT_SFX_VOLUME); set(value) = prefs.edit().putFloat("sfx_volume", value).apply()
+
+    /**
+     * v0.15: os volumes antigos (50 % música, 80 % efeitos) eram altos demais. Uma vez por
+     * instalação, desce-os até aos valores novos -- só desce: quem já tinha escolhido um volume
+     * mais baixo fica com o seu. Depois disso vale o que o utilizador escolher.
+     */
+    private fun migrateAudio(): SharedPreferences {
+        if (!prefs.getBoolean("audio_v2", false)) {
+            prefs.edit().putBoolean("audio_v2", true)
+                .putFloat("bgm_volume", prefs.getFloat("bgm_volume", DEFAULT_BGM_VOLUME).coerceAtMost(DEFAULT_BGM_VOLUME))
+                .putFloat("sfx_volume", prefs.getFloat("sfx_volume", DEFAULT_SFX_VOLUME).coerceAtMost(DEFAULT_SFX_VOLUME))
+                .apply()
+        }
+        return prefs
+    }
 
     var disabledControllerStyle: String? get() = prefs.getString("disabled_controller_style", null); set(value) = prefs.edit().putString("disabled_controller_style", value).apply()
     var disabledL2r2Style: String? get() = prefs.getString("disabled_l2r2_style", null); set(value) = prefs.edit().putString("disabled_l2r2_style", value).apply()
@@ -209,10 +292,43 @@ class SharedPrefsRepo @Inject constructor(
     // pelo overlay e nunca pela aba Performance -> Per-App Overrides, o que fazia os dois
     // ecrãs nunca concordarem entre si. Ver AppOverrideRepository -- agora fonte única.
 
-    fun saveCustomProfile(name: String, type: String, val1: Float, val2: Float, val3: Float, val4: Float, val5: Float = 0f) {
-        prefs.edit().putString("custom_profile_${name}_type", type).putFloat("custom_profile_${name}_v1", val1).putFloat("custom_profile_${name}_v2", val2).putFloat("custom_profile_${name}_v3", val3).putFloat("custom_profile_${name}_v4", val4).putFloat("custom_profile_${name}_v5", val5).apply()
+    fun saveCustomProfile(
+        name: String, type: String, val1: Float, val2: Float, val3: Float, val4: Float, val5: Float = 0f,
+        pinMask: Int = 0, offlineMask: Int = 0, fan: Int = -1,
+    ) {
+        val n = name.trim().ifEmpty { return }
+        prefs.edit().putString("custom_profile_${n}_type", type).putFloat("custom_profile_${n}_v1", val1).putFloat("custom_profile_${n}_v2", val2).putFloat("custom_profile_${n}_v3", val3).putFloat("custom_profile_${n}_v4", val4).putFloat("custom_profile_${n}_v5", val5)
+            .putInt("custom_profile_${n}_pin", pinMask).putInt("custom_profile_${n}_cores", offlineMask).putInt("custom_profile_${n}_fan", fan)
+            .commit()
         _customProfilesFlow.value = getAllCustomProfiles()
     }
+
+    fun saveCustomProfile(p: CustomProfile) = saveCustomProfile(p.name, p.type, p.v1, p.v2, p.v3, p.v4, p.v5, p.pinMask, p.offlineMask, p.fan)
+
+    fun deleteCustomProfile(name: String) {
+        val edit = prefs.edit()
+        listOf("type", "v1", "v2", "v3", "v4", "v5", "pin", "cores", "fan").forEach { edit.remove("custom_profile_${name}_$it") }
+        edit.commit()
+        if (activeProfileName == name) activeProfileName = null
+        _customProfilesFlow.value = getAllCustomProfiles()
+    }
+
+    /** Perfil global aplicado: o marcado como ativo ou, sem marca, o guardado igual ao estado atual. */
+    fun effectiveGlobalProfileName(): String? = activeProfileName ?: _customProfilesFlow.value.firstOrNull {
+        it.matches(activeLimitMode, tdpProfileId, tdpValue, cpuPerfClock, cpuPrimeClock, gpuClock, cpuEffClock, clockPinMask, offlineCpuMask, fanMode)
+    }?.name
+
+    fun customProfile(name: String?): CustomProfile? = name?.let { n -> _customProfilesFlow.value.firstOrNull { it.name == n } }
+
+    /**
+     * Perfil global atualmente aplicado (o chip "Ativo"). Qualquer ajuste manual (slider, clock,
+     * núcleo, perfil fixo de TDP) apaga-o: o que está aplicado deixou de ser aquele perfil.
+     */
+    var activeProfileName: String?
+        get() = prefs.getString("active_profile_name", null)
+        set(value) { prefs.edit().putString("active_profile_name", value).apply(); _activeProfileFlow.value = value }
+    private val _activeProfileFlow = kotlinx.coroutines.flow.MutableStateFlow(prefs.getString("active_profile_name", null))
+    val activeProfileFlow: kotlinx.coroutines.flow.StateFlow<String?> get() = _activeProfileFlow
 
     fun getAllCustomProfiles(): List<CustomProfile> {
         val profiles = mutableListOf<CustomProfile>()
@@ -220,7 +336,12 @@ class SharedPrefsRepo @Inject constructor(
             // removePrefix/removeSuffix: o replace() antigo também apagava "_type" do MEIO do
             // nome ("meu_type_x" virava "meu_x" e os valores eram lidos de chaves inexistentes).
             val name = key.removePrefix("custom_profile_").removeSuffix("_type")
-            profiles.add(CustomProfile(name, prefs.getString(key, "TDP") ?: "TDP", prefs.getFloat("custom_profile_${name}_v1", 0f), prefs.getFloat("custom_profile_${name}_v2", 0f), prefs.getFloat("custom_profile_${name}_v3", 0f), prefs.getFloat("custom_profile_${name}_v4", 0f), prefs.getFloat("custom_profile_${name}_v5", 0f)))
+            profiles.add(
+                CustomProfile(
+                    name, prefs.getString(key, "TDP") ?: "TDP", prefs.getFloat("custom_profile_${name}_v1", 0f), prefs.getFloat("custom_profile_${name}_v2", 0f), prefs.getFloat("custom_profile_${name}_v3", 0f), prefs.getFloat("custom_profile_${name}_v4", 0f), prefs.getFloat("custom_profile_${name}_v5", 0f),
+                    pinMask = prefs.getInt("custom_profile_${name}_pin", 0), offlineMask = prefs.getInt("custom_profile_${name}_cores", 0), fan = prefs.getInt("custom_profile_${name}_fan", -1),
+                ),
+            )
         }
         return profiles.sortedBy { it.name.lowercase() }
     }
@@ -249,7 +370,7 @@ class SharedPrefsRepo @Inject constructor(
                 layout = runCatching { com.dfdx047.odinhub.models.HudLayout.valueOf(prefs.getString("hud_layout", d.layout.name)!!) }.getOrDefault(d.layout),
                 position = runCatching { com.dfdx047.odinhub.models.HudPosition.valueOf(prefs.getString("hud_position", d.position.name)!!) }.getOrDefault(d.position),
                 metrics = com.dfdx047.odinhub.models.HudConfig.decodeMetrics(prefs.getString("hud_metrics", null)),
-                textScale = prefs.getFloat("hud_text_scale", d.textScale),
+                textScale = com.dfdx047.odinhub.models.HudConfig.clampScale(prefs.getFloat("hud_text_scale", d.textScale)),
                 backgroundOpacity = prefs.getFloat("hud_bg_opacity", d.backgroundOpacity),
                 style = runCatching { com.dfdx047.odinhub.models.HudStyle.valueOf(prefs.getString("hud_style", d.style.name)!!) }.getOrDefault(d.style),
             )
@@ -284,4 +405,9 @@ class SharedPrefsRepo @Inject constructor(
 
     /** Último aparelho anunciado como "detetado" (para o aviso aparecer uma vez por aparelho). */
     var lastDetectedDeviceId: String? get() = prefs.getString("last_detected_device", null); set(value) = prefs.edit().putString("last_detected_device", value).apply()
+
+    companion object {
+        const val DEFAULT_BGM_VOLUME = 0.25f
+        const val DEFAULT_SFX_VOLUME = 0.35f
+    }
 }

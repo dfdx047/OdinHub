@@ -19,12 +19,14 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -46,7 +48,6 @@ import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
@@ -129,7 +130,10 @@ class PerformanceHud(
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                     WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                    // Perto da borda o sistema estreitava a janela WRAP_CONTENT (e a barra mudava
+                    // de forma a meio do arrasto). O arrasto já a mantém dentro do ecrã (moveTo).
+                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
                 PixelFormat.TRANSLUCENT,
             ).also { applyPosition(it, config.position) }
 
@@ -142,17 +146,25 @@ class PerformanceHud(
                 val raw = remember(appearance) { AvailableThemes.getOrElse(prefs.selectedThemeIndex) { AvailableThemes[0] } }
                 val theme = getResolvedTheme(raw, prefs.useAmoledBlack, prefs.useGlass)
                 val scale = liveScale.value ?: cfg.textScale
-                HudContent(
-                    config = if (scale == cfg.textScale) cfg else cfg.copy(textScale = scale),
-                    snap = snap,
-                    theme = theme,
-                    isEn = isEn,
-                    showGrip = gripVisible.value,
-                    // BUG "acrescento uma métrica e ela fica cortada": a janela é WRAP_CONTENT,
-                    // mas o ComposeView não volta a ser medido pela janela quando o conteúdo
-                    // cresce. A cada mudança de tamanho (métricas ou redimensionar), nova medição.
-                    modifier = Modifier.onSizeChanged { relayout() },
-                )
+                // Área de toque mínima (invisível): num HUD pequenino a barra tem ~20 dp de altura
+                // e, encostada a um canto, ficava quase impossível de voltar a apanhar.
+                Box(modifier = Modifier.heightIn(min = MIN_TOUCH_DP.dp), contentAlignment = Alignment.CenterStart) {
+                    HudContent(
+                        config = if (scale == cfg.textScale) cfg else cfg.copy(textScale = scale),
+                        snap = snap,
+                        theme = theme,
+                        isEn = isEn,
+                        showGrip = gripVisible.value,
+                        // BUG "acrescento uma métrica e ela fica cortada": a janela é WRAP_CONTENT,
+                        // mas o ComposeView não volta a ser medido pela janela quando o conteúdo
+                        // cresce. A cada mudança de tamanho (métricas ou redimensionar), nova medição.
+                        // E a largura vai à janela em px exatos: com WRAP_CONTENT, o Android mede
+                        // primeiro com a largura de um diálogo (~738 px no Odin 2 Mini) e o Compose
+                        // aceita-a -- era isso que partia a barra em duas linhas. (Este tamanho é
+                        // o do conteúdo inteiro, medido sem limite de largura dentro do HudContent.)
+                        modifier = Modifier.onSizeChanged { resizeTo(it.width) },
+                    )
+                }
             }
             installTouch(newHost.composeView)
             try {
@@ -179,10 +191,17 @@ class PerformanceHud(
         }
     }
 
-    private fun relayout() {
+    /** Janela com a largura exata do conteúdo (ver o comentário em show), sempre dentro do ecrã. */
+    private fun resizeTo(contentWidthPx: Int) {
         main.post {
             val view = host?.composeView ?: return@post
             val lp = params ?: return@post
+            val screenW = runCatching { windowManager?.currentWindowMetrics?.bounds?.width() }.getOrNull() ?: context.resources.displayMetrics.widthPixels
+            val w = contentWidthPx.coerceIn(1, screenW)
+            lp.width = w
+            val centered = (lp.gravity and Gravity.HORIZONTAL_GRAVITY_MASK) == Gravity.CENTER_HORIZONTAL
+            if (centered) lp.x = lp.x.coerceIn(-(screenW - w) / 2, (screenW - w) / 2)
+            else lp.x = lp.x.coerceIn(0, (screenW - w).coerceAtLeast(0))
             view.requestLayout()
             runCatching { windowManager?.updateViewLayout(view, lp) }
         }
@@ -355,6 +374,8 @@ class PerformanceHud(
         const val GRIP_VISIBLE_MS = 3_000L
         /** Abaixo disto um toque não é arrasto (os dois toques não mexem o HUD). */
         const val TOUCH_SLOP_DP = 4f
+        /** Altura mínima da janela do HUD, para se conseguir sempre tocar-lhe. */
+        const val MIN_TOUCH_DP = 40
     }
 }
 
@@ -369,7 +390,7 @@ private fun heatColor(value: Float?, warm: Float, hot: Float, normal: Color): Co
 }
 
 /** Grupo de uma linha do HUD: cada estilo pode dar uma cor própria a cada grupo. */
-private enum class Group { FPS, CPU, CORES, GPU, RAM, POWER, BATTERY, CLOCK }
+private enum class Group { FPS, CPU, CORES, GPU, RAM, POWER, BATTERY, CLOCK, PROFILE }
 
 /** Aparência resolvida de um [HudStyle]. */
 private data class HudPalette(
@@ -408,6 +429,7 @@ private fun palette(style: HudStyle, theme: ConsoleTheme, opacity: Float): HudPa
                 Group.RAM -> Color(0xFFC26693)
                 Group.POWER, Group.BATTERY -> Color(0xFFFF9078)
                 Group.CLOCK -> Color.White
+                Group.PROFILE -> Color(0xFFE5C76B)
             }
         },
         graph = Color(0xFF00FF00),
@@ -475,13 +497,14 @@ fun HudContent(config: HudConfig, snap: HudSnapshot, theme: ConsoleTheme, isEn: 
         .padding(horizontal = (8 * scale).dp, vertical = (5 * scale).dp)
 
     if (config.layout == HudLayout.HORIZONTAL) {
-        // Com muitas métricas a barra passava da largura do ecrã e cortava-se: agora quebra para
-        // uma segunda linha (como o MangoHud), nunca mais larga do que o ecrã.
-        val maxWidth = (LocalConfiguration.current.screenWidthDp - 16).coerceAtLeast(200).dp
-        FlowRow(
-            modifier = base.widthIn(max = maxWidth),
+        // SEMPRE uma linha reta (como o MangoHud/RTSS em barra). Antes quebrava para uma segunda
+        // linha quando passava da largura: perto da borda a janela ficava mais estreita, a barra
+        // mudava de altura a meio do arrasto e o HUD "saltava". Com muitas métricas, encolhe-se
+        // com a pinça ou o canto.
+        Row(
+            modifier = Modifier.wrapContentWidth(Alignment.Start, unbounded = true).then(base),
             horizontalArrangement = Arrangement.spacedBy((10 * scale).dp),
-            verticalArrangement = Arrangement.spacedBy((2 * scale).dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             items.forEach { item -> HudItem(item, pal, labelSize, valueSize, inline = true) }
             if (config.has(HudMetric.FPS_GRAPH) && snap.frametimeHistory.size > 1) {
@@ -489,7 +512,7 @@ fun HudContent(config: HudConfig, snap: HudSnapshot, theme: ConsoleTheme, isEn: 
             }
         }
     } else {
-        Column(modifier = base.widthIn(min = (120 * scale).dp), verticalArrangement = Arrangement.spacedBy((2 * scale).dp)) {
+        Column(modifier = Modifier.wrapContentWidth(Alignment.Start, unbounded = true).then(base).widthIn(min = (120 * scale).dp), verticalArrangement = Arrangement.spacedBy((2 * scale).dp)) {
             items.forEach { item -> HudItem(item, pal, labelSize, valueSize, inline = false) }
             if (config.has(HudMetric.FPS_GRAPH) && snap.frametimeHistory.size > 1) {
                 FrametimeGraph(snap.frametimeHistory, pal.graph, theme, Modifier.width((150 * scale).dp).height((28 * scale).dp).padding(top = 2.dp))
@@ -545,6 +568,10 @@ private fun buildItems(cfg: HudConfig, s: HudSnapshot, isEn: Boolean, normal: Co
         if (cfg.has(HudMetric.BATTERY_TEMP)) values += v(s.batteryTempC?.let { "${it.roundToInt()}°C" } ?: "--°C", heatColor(s.batteryTempC, 42f, 48f, normal))
         out += HudItemData(Group.BATTERY, "BAT", values)
     }
+    if (cfg.has(HudMetric.PROFILE) && s.profileName != null) {
+        val name = s.profileName.ifEmpty { if (s.profileFromGame) (if (isEn) "Game" else "Jogo") else "Manual" }
+        out += HudItemData(Group.PROFILE, if (isEn) "PROFILE" else "PERFIL", listOf(v(name)))
+    }
     if (cfg.has(HudMetric.CLOCK)) {
         out += HudItemData(Group.CLOCK, "", listOf(v(SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date()))))
     }
@@ -557,8 +584,8 @@ private fun HudItem(item: HudItemData, pal: HudPalette, labelSize: TextUnit, val
     val valueStyle = TextStyle(fontSize = valueSize, fontWeight = FontWeight.Bold, fontFamily = pal.font, shadow = pal.shadow)
     if (inline) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            if (item.label.isNotEmpty()) Text(item.label, style = labelStyle)
-            item.values.forEach { (text, color) -> Text(text, style = valueStyle.copy(color = color), maxLines = 1) }
+            if (item.label.isNotEmpty()) Text(item.label, style = labelStyle, maxLines = 1, softWrap = false)
+            item.values.forEach { (text, color) -> Text(text, style = valueStyle.copy(color = color), maxLines = 1, softWrap = false) }
         }
     } else {
         Row(verticalAlignment = Alignment.CenterVertically) {

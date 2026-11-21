@@ -4,6 +4,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.util.Log
+import com.dfdx047.odinhub.data.resolvedWith
 import com.dfdx047.odinhub.data.SharedPrefsRepo
 import com.dfdx047.odinhub.models.TdpProfiles
 import com.dfdx047.odinhub.tools.hardware.PerformanceManager
@@ -94,6 +95,21 @@ class DebugTestReceiver : BroadcastReceiver() {
                         Log.i(TAG, "rule $pkg id=$id slider=$slider -> stored=${back?.tdpWatts} label=${back?.tdpProfile} reloadedId=${back?.tdpWatts?.let { TdpProfiles.idForWatts(it) }}")
                         performanceManager.applyTdpSelection(back?.tdpWatts ?: TdpProfiles.resolveWatts(prefs.tdpProfileId, prefs.tdpValue))
                     }
+                    // Liga um perfil guardado a um jogo (o mesmo que tocar no perfil no overlay).
+                    "linkrule" -> {
+                        val pkg = intent.getStringExtra("pkg").orEmpty()
+                        val name = intent.getStringExtra("name")
+                        val p = prefs.customProfile(name)
+                        kotlinx.coroutines.runBlocking {
+                            val base = overrides.get(pkg) ?: com.dfdx047.odinhub.data.AppOverrideEntity(
+                                packageName = pkg, tdpProfile = null, clockProfile = null, fanProfile = null,
+                            )
+                            overrides.upsert(base.copy(profileName = p?.name).let { e -> if (p != null) e.resolvedWith(p) else e })
+                            var tries = 0
+                            while (overrides.get(pkg)?.profileName != p?.name && tries++ < 20) kotlinx.coroutines.delay(100)
+                        }
+                        Log.i(TAG, "linkrule $pkg -> ${overrides.get(pkg)?.profileName} (${p?.summary(false)})")
+                    }
                     // O mesmo que MainViewModel.updateFanMode.
                     "fan" -> {
                         val mode = com.dfdx047.odinhub.models.FanMode.fromString(intent.getStringExtra("mode").orEmpty())
@@ -108,6 +124,11 @@ class DebugTestReceiver : BroadcastReceiver() {
                     }
                     "fantest" -> fanCurve.testSpeed(prefs.fanCurveConfig, intent.getIntExtra("percent", 100))
                     "fanstatus" -> Unit
+                    "delprofile" -> {
+                        val name = intent.getStringExtra("name").orEmpty()
+                        prefs.deleteCustomProfile(name)
+                        Log.i(TAG, "delprofile $name -> exists=${prefs.customProfile(name) != null}")
+                    }
                     "delrule" -> {
                         val pkg = intent.getStringExtra("pkg").orEmpty()
                         kotlinx.coroutines.runBlocking { overrides.delete(pkg) }
@@ -117,7 +138,14 @@ class DebugTestReceiver : BroadcastReceiver() {
                     "overlay" -> com.dfdx047.odinhub.service.GamingOverlayService.toggleOverlayFlow.tryEmit(Unit)
                     "hud" -> {
                         val on = intent.getBooleanExtra("on", true)
+                        // pos/x/y opcionais: põe o HUD fora da barra de estado para testar o arraste.
+                        val pos = intent.getStringExtra("pos")?.let { runCatching { com.dfdx047.odinhub.models.HudPosition.valueOf(it) }.getOrNull() }
+                        val scale = if (intent.hasExtra("scale")) intent.getFloatExtra("scale", 1f) else null
                         prefs.hudConfig = prefs.hudConfig.copy(enabled = on)
+                            .let { if (pos != null) it.copy(position = pos) else it }
+                            .let { if (scale != null) it.copy(textScale = com.dfdx047.odinhub.models.HudConfig.clampScale(scale)) else it }
+                        if (intent.hasExtra("x")) prefs.hudOffsetX = intent.getIntExtra("x", Int.MIN_VALUE)
+                        if (intent.hasExtra("y")) prefs.hudOffsetY = intent.getIntExtra("y", Int.MIN_VALUE)
                         if (on) {
                             com.dfdx047.odinhub.service.PerformanceHudService.hiddenFlow.value = false
                             com.dfdx047.odinhub.service.PerformanceHudService.startIfEnabled(context.applicationContext, prefs)

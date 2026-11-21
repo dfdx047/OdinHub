@@ -48,6 +48,8 @@ class HudSampler @Inject constructor(
     private val performanceManager: PerformanceManager,
     private val foregroundTracker: ForegroundAppTracker,
     private val rootLines: com.dfdx047.odinhub.tools.RootLines,
+    private val prefs: com.dfdx047.odinhub.data.SharedPrefsRepo,
+    private val overrides: com.dfdx047.odinhub.data.AppOverrideRepository,
 ) {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var job: Job? = null
@@ -243,7 +245,20 @@ class HudSampler @Inject constructor(
             batteryPercent = if (cfg.has(HudMetric.BATTERY)) readLong("$battery/capacity")?.toInt() ?: api.percent else null,
             batteryTempC = if (cfg.has(HudMetric.BATTERY_TEMP)) HudMath.parseTempC(readText("$battery/temp")) ?: api.tempC else null,
             tdpTargetW = if (cfg.has(HudMetric.TDP)) performanceManager.autoTdpStatus.value.takeIf { it.active }?.targetWatts else null,
+            profileName = if (cfg.has(HudMetric.PROFILE)) currentProfile().first else null,
+            profileFromGame = cfg.has(HudMetric.PROFILE) && currentProfile().second,
         )
+    }
+
+    /**
+     * Perfil em uso agora: o ligado ao jogo em primeiro plano; jogo com regra própria sem perfil
+     * = "" (ajustes do jogo); sem regra = o perfil global ativo (ou "" se for ajuste solto).
+     */
+    private fun currentProfile(): Pair<String, Boolean> {
+        val pkg = foregroundTracker.currentPackage.value
+        val rule = overrides.get(pkg)
+        if (rule != null) return (rule.profileName?.takeIf { prefs.customProfile(it) != null } ?: "") to true
+        return (prefs.effectiveGlobalProfileName() ?: "") to false
     }
 
     /** Procura as camadas do jogo em primeiro plano (só quando o jogo muda ou a camada falha). */

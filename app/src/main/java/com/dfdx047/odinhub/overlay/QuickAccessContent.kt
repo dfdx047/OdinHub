@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.runtime.rememberCoroutineScope
 import com.dfdx047.odinhub.data.AppOverrideEntity
+import com.dfdx047.odinhub.data.resolvedWith
 import com.dfdx047.odinhub.data.AppOverrideRepository
 import com.dfdx047.odinhub.data.SharedPrefsRepo
 import com.dfdx047.odinhub.models.AppOverrideLabels
@@ -210,14 +211,22 @@ private fun QuickAccessPanel(
     // sem coroutine do painel, que era cancelada se o painel fechasse dentro da janela de espera
     // e deixava o hardware num valor diferente do que a UI mostrava.
     fun applyTdpLive(watts: Float) = performanceManager.applyDynamicTdp(watts)
+    // Regra do jogo já com o perfil ligado resolvido (ver resolvedWith): os valores mostrados
+    // são os ATUAIS do perfil, não a cópia que ficou gravada na regra.
+    val rawOverride = overridesByPackage[currentPackage]
+    val resolvedOverride = rawOverride?.resolvedWith(prefs.customProfile(rawOverride.profileName))
+    // Perfil guardado ligado a este jogo (ou, sem jogo, o perfil global ativo).
+    var linkedProfile by remember(currentPackage) {
+        mutableStateOf(if (currentPackage == ForegroundAppTracker.GLOBAL) prefs.effectiveGlobalProfileName() else rawOverride?.profileName)
+    }
     // Cluster de eficiência (8 Gen 2 / 865): declarado aqui em cima porque o applyClocksLive o lê.
-    var cpuEffClock by remember(currentPackage) { mutableFloatStateOf(overridesByPackage[currentPackage]?.effClockKHz?.let { it / 1000f } ?: prefs.cpuEffClock) }
+    var cpuEffClock by remember(currentPackage) { mutableFloatStateOf(resolvedOverride?.effClockKHz?.let { it / 1000f } ?: prefs.cpuEffClock) }
     // Clocks fixos (ver ClockPin) deste jogo; null na regra = segue o global.
-    var clockPinMask by remember(currentPackage) { mutableIntStateOf(overridesByPackage[currentPackage]?.clockPinMask ?: prefs.clockPinMask) }
+    var clockPinMask by remember(currentPackage) { mutableIntStateOf(resolvedOverride?.clockPinMask ?: prefs.clockPinMask) }
     fun applyClocksLive(perfMHz: Float, primeMHz: Float, gpuMHz: Float) =
         performanceManager.applyAbsoluteClocks((perfMHz * 1000).toLong(), (primeMHz * 1000).toLong(), (gpuMHz * 1_000_000).toLong(), (cpuEffClock * 1000).toLong(), clockPinMask)
     // Núcleos desligados deste jogo (ver CpuHotplug); null na regra = segue o global.
-    var offlineCpuMask by remember(currentPackage) { mutableIntStateOf(overridesByPackage[currentPackage]?.offlineCpuMask ?: prefs.offlineCpuMask) }
+    var offlineCpuMask by remember(currentPackage) { mutableIntStateOf(resolvedOverride?.offlineCpuMask ?: prefs.offlineCpuMask) }
 
     // CAUSA RAIZ (auditoria): tudo aqui era lido/escrito só no SharedPrefs (`prefs.getPerApp*`
     // / `prefs.savePerAppConfig`), um armazenamento TOTALMENTE separado da tabela Room que a
@@ -230,7 +239,7 @@ private fun QuickAccessPanel(
     // Lido do mapa VIVO do repositório (e não de um `get()` em cache no `remember`): assim, uma
     // regra criada/alterada no ecrã "Per-App Overrides" já aparece aqui da próxima vez que o
     // painel compõe para aquele jogo -- o sentido "banco -> overlay" da parceria que faltava.
-    val existingOverride = overridesByPackage[currentApp]
+    val existingOverride = resolvedOverride
 
     // Idioma partilhado com o resto da app (SharedPrefsRepo.isEnglish) -- o overlay estava todo
     // escrito em português fixo, mesmo com o inglês escolhido.
@@ -291,7 +300,6 @@ private fun QuickAccessPanel(
     var cpuPrimeClock by remember(currentApp) { mutableFloatStateOf(existingOverride?.primeClockKHz?.let { it / 1000f } ?: prefs.cpuPrimeClock) }
     var gpuClock by remember(currentApp) { mutableFloatStateOf(existingOverride?.gpuClockHz?.let { it / 1_000_000f } ?: prefs.gpuClock) }
 
-    var savedPresetName by remember { mutableStateOf("") }
 
     // Limite térmico deste jogo (null = segue o global) e cor própria do ecrã.
     var thermalMode by remember(currentApp) { mutableStateOf(existingOverride?.thermalMode) }
@@ -335,8 +343,15 @@ private fun QuickAccessPanel(
     // utilizador nunca pediu.
     var touchedByUser by remember(currentApp) { mutableStateOf(false) }
 
+    /** O painel ainda mostra exatamente o perfil ligado? (senão o jogo passou a ter ajustes próprios) */
+    fun linkedStillMatches(): Boolean =
+        prefs.customProfile(linkedProfile)?.matches(
+            activeLimitMode, tdpProfileId, tdpValue, cpuPerfClock, cpuPrimeClock, gpuClock, cpuEffClock, clockPinMask, offlineCpuMask, fanMode,
+        ) == true
+
     fun persistOverride() {
         touchedByUser = true
+        if (linkedProfile != null && !linkedStillMatches()) linkedProfile = null
         // Guarda: nunca gravar uma regra para "nenhum app" (ForegroundAppTracker.GLOBAL) nem para
         // um pacote vazio. Era exatamente isto que acontecia antes -- as regras do jogo acabavam
         // numa linha "global" que nenhum ecrã mostrava. Se o painel for aberto fora de um app (o
@@ -358,6 +373,7 @@ private fun QuickAccessPanel(
             prefs.fanMode = fanMode
             prefs.offlineCpuMask = offlineCpuMask
             prefs.clockPinMask = clockPinMask
+            prefs.activeProfileName = linkedProfile
             return
         }
 
@@ -401,6 +417,7 @@ private fun QuickAccessPanel(
             m2Macro = MacroMode.encode(m2Mode, m2Steps.toList()),
             offlineCpuMask = offlineCpuMask,
             clockPinMask = clockPinMask,
+            profileName = linkedProfile,
         )
         // Escrita no scope do repositório, não no do Compose: ver AppOverrideRepository.upsertAsync
         // -- a gravação feita no `onDispose` (painel a fechar / troca de jogo) caía num scope já
@@ -418,7 +435,50 @@ private fun QuickAccessPanel(
      * ventoinha e cor) para o perfil GLOBAL, que vale para todos os jogos sem regra própria.
      * O limite térmico não é copiado: o global aplica-se pelo ThermalManager, com backups próprios.
      */
+    /**
+     * Toque num perfil guardado: aplica-o já e LIGA-O a este jogo -- da próxima vez que o jogo
+     * abrir (mesmo com a app fechada), o serviço de acessibilidade aplica este perfil.
+     */
+    fun applySavedProfileHere(p: com.dfdx047.odinhub.data.CustomProfile) {
+        activeLimitMode = p.type
+        offlineCpuMask = com.dfdx047.odinhub.tools.hardware.CpuHotplug.sanitize(p.offlineMask, performanceManager.possibleCpus.ifEmpty { (0..7).toList() })
+        if (p.fan >= 0) fanMode = p.fan
+        performanceManager.applyCoreMask(offlineCpuMask)
+        if (p.type == "TDP") {
+            val stock = TdpProfiles.isStockWatts(p.v1)
+            tdpProfileId = TdpProfiles.idForWatts(p.v1)
+            if (!stock) tdpValue = p.v1
+            performanceManager.applyTdpSelection(if (stock) null else p.v1)
+        } else {
+            cpuPerfClock = p.v2; cpuPrimeClock = p.v3; gpuClock = p.v4
+            if (p.v5 > 0f) cpuEffClock = p.v5
+            clockPinMask = p.pinMask
+            applyClocksLive(p.v2, p.v3, p.v4)
+        }
+        if (p.fan >= 0) {
+            val fan = com.dfdx047.odinhub.models.FanMode.fromSettingsValue(p.fan)
+            scope.launch(Dispatchers.IO) { performanceManager.applyFanMode(fan) }
+        }
+        linkedProfile = p.name
+        persistOverride()
+        profileNotice = if (currentApp == ForegroundAppTracker.GLOBAL) (if (isEn) "Profile \"${p.name}\" applied ✓" else "Perfil \"${p.name}\" aplicado ✓")
+        else (if (isEn) "\"${p.name}\" linked to this game ✓" else "\"${p.name}\" ligado a este jogo ✓")
+    }
+
+    /** "Guardar atuais": cria um perfil com o que está no painel e liga-o a este jogo. */
+    fun saveCurrentAsProfileHere(name: String) {
+        val watts = TdpProfiles.encodeWatts(TdpProfiles.resolveWatts(tdpProfileId, tdpValue))
+        prefs.saveCustomProfile(
+            name, activeLimitMode, watts, cpuPerfClock, cpuPrimeClock, gpuClock, cpuEffClock,
+            pinMask = clockPinMask, offlineMask = offlineCpuMask,
+            fan = fanMode.takeIf { m -> com.dfdx047.odinhub.models.FanMode.selectable.any { it.settingsValue == m } } ?: -1,
+        )
+        linkedProfile = name
+        persistOverride()
+    }
+
     fun saveAsGlobal() {
+        prefs.activeProfileName = linkedProfile?.takeIf { linkedStillMatches() }
         prefs.activeLimitMode = activeLimitMode
         prefs.tdpProfileId = tdpProfileId
         prefs.tdpValue = tdpValue
@@ -443,6 +503,7 @@ private fun QuickAccessPanel(
     fun useGlobalProfile() {
         val pkg = currentApp
         touchedByUser = false
+        linkedProfile = null
         overrideRepository.deleteAsync(pkg)
         activeLimitMode = prefs.activeLimitMode
         tdpProfileId = prefs.tdpProfileId
@@ -507,6 +568,8 @@ private fun QuickAccessPanel(
                 notice = profileNotice,
                 onSaveAsGlobal = { saveAsGlobal() },
                 onUseGlobal = { useGlobalProfile() },
+                linkedName = linkedProfile,
+                globalName = prefs.effectiveGlobalProfileName(),
             )
         }
 
@@ -646,7 +709,7 @@ private fun QuickAccessPanel(
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     listOf("Quality", "Balanced", "Performance", "Ultra").forEach { mode ->
                         val isSel = sgsrMode == mode
-                        Box(modifier = Modifier.weight(1f).clip(RoundedCornerShape(6.dp)).background(if (isSel) theme.primary else theme.surface.copy(alpha = 0.5f)).clickable { sgsrMode = mode; VulkanNativeBridge.applySgsr(sgsrEnabled, mode); persistOverride() }.padding(vertical = 6.dp), contentAlignment = Alignment.Center) {
+                        Box(modifier = Modifier.weight(1f).selectedOutline(isSel, theme, 6, theme.surface.copy(alpha = 0.5f)).clickable { sgsrMode = mode; VulkanNativeBridge.applySgsr(sgsrEnabled, mode); persistOverride() }.padding(vertical = 6.dp), contentAlignment = Alignment.Center) {
                             Text(mode, color = if (isSel) theme.onPrimary else theme.text, fontSize = 10.sp)
                         }
                     }
@@ -693,6 +756,14 @@ private fun QuickAccessPanel(
                 }
             }
             else -> {
+                // Jogo sem regra própria segue o global: mostra o perfil global como o ativo.
+                val followsGlobal = existingOverride == null && !touchedByUser
+                OverlayProfilesSection(
+                    profiles = customProfiles, linkedName = linkedProfile ?: (if (followsGlobal) prefs.effectiveGlobalProfileName() else null), theme = theme, isEn = isEn,
+                    inGame = currentApp != ForegroundAppTracker.GLOBAL && currentApp.isNotBlank(),
+                    onApply = { applySavedProfileHere(it) }, onSave = { saveCurrentAsProfileHere(it) },
+                )
+                Spacer(modifier = Modifier.height(16.dp))
                 Text(if (isEn) "FAN CONTROL" else "CONTROLE DA VENTOINHA", color = theme.text.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
                 Spacer(modifier = Modifier.height(8.dp))
                 Row(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(theme.surface.copy(alpha = 0.5f)).padding(4.dp), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -758,8 +829,8 @@ private fun QuickAccessPanel(
                 Text(if (isEn) "LIMIT MODE" else "MODO DE LIMITAÇÃO", color = theme.text.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
                 Spacer(modifier = Modifier.height(8.dp))
                 Row(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(theme.scrim).border(1.dp, theme.text.copy(alpha = 0.1f), RoundedCornerShape(8.dp)).padding(4.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Box(modifier = Modifier.weight(1f).clip(RoundedCornerShape(6.dp)).background(if (activeLimitMode == "TDP") theme.primary else Color.Transparent).clickable { activeLimitMode = "TDP"; performanceManager.applyTdpSelection(TdpProfiles.resolveWatts(tdpProfileId, tdpValue)); persistOverride() }.padding(vertical = 10.dp), contentAlignment = Alignment.Center) { Text("TDP", color = if (activeLimitMode == "TDP") theme.onPrimary else theme.text.copy(alpha = 0.6f), fontSize = 11.sp, fontWeight = FontWeight.Bold) }
-                    Box(modifier = Modifier.weight(1f).clip(RoundedCornerShape(6.dp)).background(if (activeLimitMode == "CLOCK") theme.primary else Color.Transparent).clickable { activeLimitMode = "CLOCK"; applyClocksLive(cpuPerfClock, cpuPrimeClock, gpuClock); persistOverride() }.padding(vertical = 10.dp), contentAlignment = Alignment.Center) { Text("Clocks", color = if (activeLimitMode == "CLOCK") theme.onPrimary else theme.text.copy(alpha = 0.6f), fontSize = 11.sp, fontWeight = FontWeight.Bold) }
+                    Box(modifier = Modifier.weight(1f).selectedOutline(activeLimitMode == "TDP", theme, 6).clickable { activeLimitMode = "TDP"; performanceManager.applyTdpSelection(TdpProfiles.resolveWatts(tdpProfileId, tdpValue)); persistOverride() }.padding(vertical = 10.dp), contentAlignment = Alignment.Center) { Text(if (activeLimitMode == "TDP") "✓ " + "TDP" else "TDP", color = if (activeLimitMode == "TDP") theme.onPrimary else theme.text.copy(alpha = 0.6f), fontSize = 11.sp, fontWeight = FontWeight.Bold) }
+                    Box(modifier = Modifier.weight(1f).selectedOutline(activeLimitMode == "CLOCK", theme, 6).clickable { activeLimitMode = "CLOCK"; applyClocksLive(cpuPerfClock, cpuPrimeClock, gpuClock); persistOverride() }.padding(vertical = 10.dp), contentAlignment = Alignment.Center) { Text(if (activeLimitMode == "CLOCK") "✓ " + "Clocks" else "Clocks", color = if (activeLimitMode == "CLOCK") theme.onPrimary else theme.text.copy(alpha = 0.6f), fontSize = 11.sp, fontWeight = FontWeight.Bold) }
                 }
 
                 Spacer(modifier = Modifier.height(14.dp))
@@ -773,28 +844,16 @@ private fun QuickAccessPanel(
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         for (profile in TdpProfiles.fixed) {
                             val isSel = tdpProfileId == profile.id
-                            Box(modifier = Modifier.weight(1f).clip(RoundedCornerShape(6.dp)).background(if (isSel) theme.primary else theme.surface.copy(alpha = 0.5f)).clickable {
+                            Box(modifier = Modifier.weight(1f).selectedOutline(isSel, theme, 6, theme.surface.copy(alpha = 0.5f)).clickable {
                                 tdpProfileId = profile.id
                                 profile.watts?.let { tdpValue = it }
                                 performanceManager.applyTdpSelection(profile.watts)
                                 persistOverride()
-                            }.padding(vertical = 8.dp), contentAlignment = Alignment.Center) { Text(profile.label(isEn), color = if (isSel) theme.onPrimary else theme.text, fontSize = 10.sp, fontWeight = FontWeight.Bold) }
+                            }.padding(vertical = 8.dp), contentAlignment = Alignment.Center) { Text(if (isSel) "✓ " + profile.label(isEn) else profile.label(isEn), color = if (isSel) theme.onPrimary else theme.text, fontSize = 10.sp, fontWeight = FontWeight.Bold, maxLines = 1) }
                         }
                     }
                     TdpProfiles.byId(tdpProfileId)?.let { selected ->
                         Text(selected.watts?.let { "${TdpProfiles.formatWatts(it)} -- ${selected.description(isEn)}" } ?: selected.description(isEn), color = theme.text.copy(alpha = 0.6f), fontSize = 10.sp, modifier = Modifier.padding(top = 4.dp))
-                    }
-                    val userTdpProfiles = customProfiles.filter { it.type == "TDP" }
-                    if (userTdpProfiles.isNotEmpty()) {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                            for (prof in userTdpProfiles) {
-                                val isSel = tdpProfileId == TdpProfiles.ID_CUSTOM && tdpValue == prof.v1
-                                Box(modifier = Modifier.clip(RoundedCornerShape(6.dp)).background(if (isSel) theme.primary else theme.surface.copy(alpha = 0.5f)).clickable { tdpProfileId = TdpProfiles.ID_CUSTOM; tdpValue = prof.v1; performanceManager.applyDynamicTdp(prof.v1); persistOverride() }.padding(horizontal = 12.dp, vertical = 8.dp), contentAlignment = Alignment.Center) {
-                                    Text("${prof.name} (${TdpProfiles.formatWatts(prof.v1)})", color = if (isSel) theme.onPrimary else theme.text, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                                }
-                            }
-                        }
                     }
                     Spacer(modifier = Modifier.height(12.dp))
                     Column(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(theme.surface.copy(alpha = 0.5f)).padding(12.dp)) {
@@ -810,28 +869,9 @@ private fun QuickAccessPanel(
                             Text(line, color = theme.primary.copy(alpha = 0.85f), fontSize = 10.sp)
                         }
                     }
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        OutlinedTextField(value = savedPresetName, onValueChange = { savedPresetName = it }, label = { Text(if (isEn) "Preset name" else "Nome do preset", fontSize = 10.sp) }, modifier = Modifier.weight(1f).height(50.dp), textStyle = TextStyle(fontSize = 12.sp, color = theme.text))
-                        Button(onClick = { if (savedPresetName.isNotBlank()) { prefs.saveCustomProfile(savedPresetName, "TDP", tdpValue, 0f, 0f, 0f); savedPresetName = "" } }, colors = ButtonDefaults.buttonColors(containerColor = theme.primary), modifier = Modifier.height(50.dp)) { Text(if (isEn) "Save" else "Salvar", fontSize = 11.sp, color = theme.onPrimary) }
-                    }
                 } else {
                     Text(if (isEn) "MANUAL CLOCKS (GPU is independent)" else "CLOCKS MANUAIS (GPU é independente)", color = theme.text.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
                     Spacer(modifier = Modifier.height(6.dp))
-                    // Sem perfis combinados de clocks: os únicos perfis que existem são os de
-                    // TDP. Aqui só há os presets guardados pelo utilizador e os chips numéricos
-                    // com as frequências REAIS do SoC (tabela do kernel via PerformanceManager).
-                    val userClockProfiles = customProfiles.filter { it.type == "CLOCK" }
-                    if (userClockProfiles.isNotEmpty()) {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                            for (prof in userClockProfiles) {
-                                Box(modifier = Modifier.clip(RoundedCornerShape(6.dp)).background(theme.surface.copy(alpha = 0.5f)).clickable { cpuPerfClock = prof.v2; cpuPrimeClock = prof.v3; gpuClock = prof.v4; if (prof.v5 > 0f) cpuEffClock = prof.v5; applyClocksLive(prof.v2, prof.v3, prof.v4); persistOverride() }.padding(horizontal = 12.dp, vertical = 8.dp), contentAlignment = Alignment.Center) {
-                                    Text(prof.name, color = theme.text, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                                }
-                            }
-                        }
-                    }
                     Spacer(modifier = Modifier.height(12.dp))
                     Column(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(theme.surface.copy(alpha = 0.5f)).padding(12.dp)) {
                         // Chips numéricos com as frequências REAIS do SoC (OPPs do kernel): o
@@ -875,11 +915,6 @@ private fun QuickAccessPanel(
                             theme = theme,
                             isEn = isEn,
                         ) { mhz -> gpuClock = mhz.toFloat(); applyClocksLive(cpuPerfClock, cpuPrimeClock, gpuClock); persistOverride() }
-                    }
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        OutlinedTextField(value = savedPresetName, onValueChange = { savedPresetName = it }, label = { Text(if (isEn) "Preset name" else "Nome do preset", fontSize = 10.sp) }, modifier = Modifier.weight(1f).height(50.dp), textStyle = TextStyle(fontSize = 12.sp, color = theme.text))
-                        Button(onClick = { if (savedPresetName.isNotBlank()) { prefs.saveCustomProfile(savedPresetName, "CLOCK", 0f, cpuPerfClock, cpuPrimeClock, gpuClock, cpuEffClock); savedPresetName = "" } }, colors = ButtonDefaults.buttonColors(containerColor = theme.primary), modifier = Modifier.height(50.dp)) { Text(if (isEn) "Save" else "Salvar", fontSize = 11.sp, color = theme.onPrimary) }
                     }
                 }
             }
@@ -971,10 +1006,14 @@ private fun ProfileActionsBar(
     notice: String?,
     onSaveAsGlobal: () -> Unit,
     onUseGlobal: () -> Unit,
+    linkedName: String? = null,
+    globalName: String? = null,
 ) {
     Column(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(theme.surface.copy(alpha = 0.5f)).padding(10.dp)) {
         Text(
-            notice ?: if (hasOwnRule) (if (isEn) "This game has its own settings (saved automatically)" else "Este jogo tem ajustes próprios (salvos sozinhos)")
+            notice ?: if (linkedName != null) (if (isEn) "This game follows the profile \"$linkedName\" (applied every time it opens)" else "Este jogo segue o perfil \"$linkedName\" (aplicado sempre que abrir)")
+            else if (hasOwnRule) (if (isEn) "This game has its own settings (saved automatically)" else "Este jogo tem ajustes próprios (salvos sozinhos)")
+            else if (globalName != null) (if (isEn) "This game follows the global profile (\"$globalName\")" else "Este jogo segue o perfil global (\"$globalName\")")
             else (if (isEn) "This game follows the global profile" else "Este jogo segue o perfil global"),
             color = if (notice != null) theme.primary else theme.text.copy(alpha = 0.7f), fontSize = 10.sp, fontWeight = if (notice != null) FontWeight.Bold else FontWeight.Normal,
         )
@@ -993,6 +1032,32 @@ private fun ProfileActionsBar(
     }
 }
 
+/**
+ * Perfis guardados no overlay: o mesmo visual da aba Desempenho. Num jogo, tocar liga o perfil
+ * ao jogo (aplicado sempre que ele abrir); fora de um jogo, aplica-o como perfil global.
+ */
+@Composable
+private fun OverlayProfilesSection(
+    profiles: List<com.dfdx047.odinhub.data.CustomProfile>,
+    linkedName: String?,
+    theme: ConsoleTheme,
+    isEn: Boolean,
+    inGame: Boolean,
+    onApply: (com.dfdx047.odinhub.data.CustomProfile) -> Unit,
+    onSave: (String) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(if (isEn) "SAVED PROFILES" else "PERFIS GUARDADOS", color = theme.text.copy(alpha = 0.5f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+        com.dfdx047.odinhub.ui.screens.ActiveProfileBanner(
+            linkedName, theme, isEn,
+            if (inGame) (if (isEn) "Tap a profile to link it to this game: it is applied every time the game opens" else "Toque num perfil para o ligar a este jogo: ele é aplicado sempre que o jogo abrir")
+            else (if (isEn) "Global profile" else "Perfil global"),
+        )
+        com.dfdx047.odinhub.ui.screens.SavedProfileGrid(profiles, linkedName, theme, isEn, onApply = onApply)
+        com.dfdx047.odinhub.ui.screens.SaveProfileRow(theme, isEn, onSave)
+    }
+}
+
 /** Opacidade do fundo do painel. */
 @Composable
 private fun PanelOpacitySection(
@@ -1007,4 +1072,12 @@ private fun PanelOpacitySection(
         Text((if (isEn) "Background opacity: " else "Opacidade do fundo: ") + "${(panelOpacity * 100).toInt()}%", color = theme.text, fontSize = 11.sp)
         Slider(value = panelOpacity, onValueChange = onOpacityChange, valueRange = 0.1f..1.0f, colors = SliderDefaults.colors(thumbColor = theme.primary, activeTrackColor = theme.primary))
     }
+}
+
+/** Fundo de um botão de escolha: o escolhido fica preenchido na cor do tema e com borda clara. */
+private fun Modifier.selectedOutline(selected: Boolean, theme: ConsoleTheme, cornerDp: Int, idle: Color = Color.Transparent): Modifier {
+    val shape = RoundedCornerShape(cornerDp.dp)
+    return clip(shape)
+        .background(if (selected) theme.primary else idle)
+        .border(if (selected) 2.dp else 0.dp, if (selected) theme.text.copy(alpha = 0.85f) else Color.Transparent, shape)
 }

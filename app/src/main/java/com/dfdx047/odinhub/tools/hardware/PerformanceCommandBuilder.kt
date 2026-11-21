@@ -273,6 +273,13 @@ object PerformanceCommandBuilder {
         pinMask: Int = 0,
         currentMinKHz: (String) -> Long? = { null },
         onlineCpus: Set<Int>? = null,
+        /**
+         * Aparelhos cujo firmware sobe os pisos sozinho (Odin 2 Mini, ver
+         * DeviceProfile.guardFirmwareFloors): nos clusters LIVRES o piso vai ao fundo da tabela e
+         * fica TRANCADO (0444), escrito antes do teto. Rótulo "-guard", sem verificação por leitura
+         * (o `scaling_min_freq` lido inclui os impulsos momentâneos do perf HAL).
+         */
+        guardFloors: Boolean = false,
     ): List<HardwareWriteOp> {
         val active = policies.filter { node -> onlineCpus == null || node.cpus.isEmpty() || node.cpus.any { it in onlineCpus } }
         // Os ratios/rótulos dependem da posição na lista ORIGINAL (Prime = a mais rápida).
@@ -288,6 +295,10 @@ object PerformanceCommandBuilder {
                 pinned -> {
                     val minOp = HardwareWriteOp(maxOp.label + "-pin", minPath, maxOp.value, HardwareWriteOp.LOCKED_MODE)
                     if (currentMin != null && target < currentMin) listOf(minOp, maxOp) else listOf(maxOp, minOp)
+                }
+                guardFloors -> {
+                    val floor = node?.availableFreqsKHz?.minOrNull()?.coerceAtMost(target) ?: target
+                    listOf(HardwareWriteOp(maxOp.label + "-guard", minPath, floor.toString(), HardwareWriteOp.LOCKED_MODE, verify = false), maxOp)
                 }
                 else -> {
                     val floor = node?.availableFreqsKHz?.minOrNull()?.coerceAtMost(target) ?: target
@@ -328,6 +339,18 @@ object PerformanceCommandBuilder {
     }
 
     const val GPU_MIN_MHZ_PATH = "/sys/class/kgsl/kgsl-3d0/min_clock_mhz"
+
+    /**
+     * Piso do devfreq da GPU (Hz). É o que o `pservice` do Odin 2 Mini mexe (401 MHz no modo
+     * Normal, 692 MHz nos modos de desempenho) -- separado do `min_clock_mhz` do kgsl.
+     */
+    const val GPU_DEVFREQ_MIN_PATH = "/sys/class/kgsl/kgsl-3d0/devfreq/min_freq"
+
+    /** Piso da GPU trancado no fundo da tabela (ver `guardFloors` em [buildCpuClockOps]). */
+    fun buildGpuFloorGuardOp(lowestHz: Long?): HardwareWriteOp? =
+        lowestHz?.takeIf { it > 0 }?.let {
+            HardwareWriteOp("gpu-devfreq-guard", GPU_DEVFREQ_MIN_PATH, it.toString(), HardwareWriteOp.LOCKED_MODE, verify = false)
+        }
 
     /**
      * Escritas de hotplug (`cpuN/online`), uma por núcleo, na ordem segura de [CpuHotplug.plan]

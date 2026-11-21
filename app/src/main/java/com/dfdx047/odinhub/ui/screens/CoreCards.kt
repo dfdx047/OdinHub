@@ -124,8 +124,14 @@ fun CoreToggleGrid(
             val clusterOff = CpuHotplug.isClusterOffline(mask, cluster)
             val canSwitchCluster = cluster.cpus.any { it != CpuHotplug.BOOT_CPU }
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                val soc = com.dfdx047.odinhub.tools.DeviceRegistry.current.soc
+                val coreType = when (cluster.kind) {
+                    ClusterKind.EFFICIENCY -> soc.effCores
+                    ClusterKind.PERF -> soc.perfCores
+                    ClusterKind.PRIME -> soc.primeCores
+                }.takeIf { it.isNotBlank() }?.let { " ($it)" }.orEmpty()
                 Text(
-                    "${clusterLabel(cluster.kind, isEn)} · ${cluster.cpus.first()}-${cluster.cpus.last()}",
+                    "${clusterLabel(cluster.kind, isEn)}$coreType · CPU ${cluster.cpus.first()}-${cluster.cpus.last()}",
                     color = theme.text, fontWeight = FontWeight.Bold, fontSize = 12.sp, modifier = Modifier.weight(1f),
                 )
                 SmallChip(

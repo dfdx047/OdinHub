@@ -72,4 +72,11 @@ data class AppOverrideEntity(
 
     /** v9: clusters/GPU com o clock fixo neste jogo (ver ClockPin). `null` = segue o global. */
     val clockPinMask: Int? = null,
+
+    /**
+     * v10: perfil de desempenho (PerfProfile) ligado a este jogo. Com ele, o modo, TDP/clocks,
+     * clocks fixos, núcleos e ventoinha vêm SEMPRE do perfil (editar o perfil muda todos os jogos
+     * ligados); os campos acima ficam só como cópia. `null` = ajustes próprios do jogo.
+     */
+    val profileName: String? = null,
 )

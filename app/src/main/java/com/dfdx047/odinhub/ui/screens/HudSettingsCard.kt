@@ -168,7 +168,7 @@ private val PREVIEW = HudSnapshot(
     frametimeHistory = listOf(16.7f, 16.6f, 17.1f, 16.7f, 22.4f, 16.7f, 16.5f, 16.8f, 16.7f, 16.7f),
     cpuUsagePercent = 38, cpuTempC = 61f, clusterMHz = listOf(1459, 2054, 2476), coreMHz = listOf(1459, 1459, 1459, 2054, 2054, 2054, 2054, 2476),
     gpuLoadPercent = 87, gpuTempC = 66f, gpuMHz = 615, ramUsedMB = 5120, ramTotalMB = 11800,
-    powerW = 8.4f, batteryPercent = 76, batteryTempC = 36f, tdpTargetW = 9f,
+    powerW = 8.4f, batteryPercent = 76, batteryTempC = 36f, tdpTargetW = 9f, profileName = "GBA",
 )
 
 @Composable

@@ -1,10 +1,12 @@
 package com.dfdx047.odinhub.service
 
 import android.accessibilityservice.AccessibilityService
+import android.util.Log
 import android.view.KeyEvent
 import android.view.accessibility.AccessibilityEvent
 import dagger.hilt.android.AndroidEntryPoint
 import com.dfdx047.odinhub.data.AppOverrideEntity
+import com.dfdx047.odinhub.data.resolvedWith
 import com.dfdx047.odinhub.tools.hardware.CpuHotplug
 import com.dfdx047.odinhub.data.AppOverrideRepository
 import com.dfdx047.odinhub.data.SharedPrefsRepo
@@ -203,7 +205,11 @@ class ForegroundAppWatcherService : AccessibilityService() {
      * (ecrã de Settings), que é também o estado para onde voltamos ao sair de um jogo.
      * [inUserApp] = há um jogo/app de utilizador à frente; fora disso todos os núcleos ligam.
      */
-    private fun applyProfile(override: AppOverrideEntity?, inUserApp: Boolean) {
+    private fun applyProfile(rule: AppOverrideEntity?, inUserApp: Boolean) {
+        // Jogo ligado a um perfil guardado: valem SEMPRE os valores atuais do perfil (editar o
+        // perfil muda todos os jogos ligados a ele). Ver resolvedWith.
+        val override = rule?.resolvedWith(prefs.customProfile(rule.profileName))
+        if (rule?.profileName != null) Log.i("ForegroundAppWatcher", "${rule.packageName}: perfil \"${rule.profileName}\"")
         // 0. Núcleos: a máscara do jogo (ou a global) só dentro de um jogo; fora dele, todos
         // ligados. O PerformanceManager aplica as regras de segurança (nunca o cpu0, etc.).
         val coreMask = if (inUserApp) override?.offlineCpuMask ?: prefs.offlineCpuMask else CpuHotplug.ALL_ONLINE

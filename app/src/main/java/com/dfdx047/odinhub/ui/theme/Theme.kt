@@ -63,6 +63,16 @@ val EliteEmberTheme = ConsoleTheme(
     group = ThemeGroup.ODIN, namePt = "Brasa Elite", accent2 = Color(0xFFFFC14D),
 )
 
+/**
+ * Exclusivo do Odin 2 Mini: azul-noite de portátil, com o azul das "bolhas" do ecrã inicial do
+ * PS Vita como destaque e um rosa suave (o botão quadrado) como segunda cor. Minimalista de
+ * propósito: as mesmas superfícies discretas dos outros temas, só a paleta muda.
+ */
+val BubbleBlueTheme = ConsoleTheme(
+    "Bubble Blue", Color(0xFF0A0F1F), Color(0xFF141B33), Color(0xFF4C8DFF), Color(0xFFE9EEFF),
+    group = ThemeGroup.ODIN, namePt = "Azul Bolha", accent2 = Color(0xFFF178B6),
+)
+
 // ---- Vibrantes ----
 val NeonTheme = ConsoleTheme(
     "Neon Grid", Color(0xFF09090C), Color(0xFF14141B), Color(0xFFFCEE0A), Color(0xFFE6FFFA),
@@ -106,7 +116,11 @@ val DynamicTheme = ConsoleTheme(
 val AvailableThemes = listOf(
     DynamicTheme, OdinTheme, OdinFrostTheme, OdinAuroraTheme, EliteEmberTheme,
     NeonTheme, ArenaTheme, VaporTheme, RoyalTheme, Retro16Theme, Retro8Theme,
+    BubbleBlueTheme,
 )
+
+/** Índice do tema exclusivo do Odin 2 Mini em [AvailableThemes] (ver DeviceProfiles.ODIN2_MINI). */
+const val VITA_THEME_INDEX = 11
 
 /** Temas por grupo, na ordem do seletor, com o índice de cada um em [AvailableThemes]. */
 val ThemesByGroup: List<Pair<ThemeGroup, List<IndexedValue<ConsoleTheme>>>>

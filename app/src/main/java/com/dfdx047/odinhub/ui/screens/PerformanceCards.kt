@@ -2,6 +2,11 @@ package com.dfdx047.odinhub.ui.screens
 
 import com.dfdx047.odinhub.ui.theme.onPrimary
 import androidx.compose.foundation.background
+import androidx.compose.ui.layout.positionInParent
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -65,7 +70,11 @@ private fun DisabledModeHint(text: String, theme: ConsoleTheme) {
     Text(text, color = theme.primary.copy(alpha = 0.9f), fontFamily = theme.fontFamily, fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(bottom = 8.dp))
 }
 
-/** Chip retangular reutilizado por todos os cartões desta aba. */
+/**
+ * Chip retangular reutilizado por todos os cartões desta aba. Selecionado = preenchido na cor do
+ * tema com borda clara (e "✓" nos perfis, [check]); num cartão desativado o escolhido fica só
+ * contornado: vê-se qual é, sem parecer que está a ser aplicado.
+ */
 @Composable
 private fun PerfChip(
     label: String,
@@ -74,17 +83,32 @@ private fun PerfChip(
     theme: ConsoleTheme,
     modifier: Modifier = Modifier,
     textColor: Color? = null,
+    check: Boolean = false,
     onClick: () -> Unit,
 ) {
+    val filled = selected && enabled
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(6.dp))
-            .background(if (selected) theme.primary else theme.surface.copy(alpha = 0.6f))
+            .background(if (filled) theme.primary else theme.surface.copy(alpha = 0.6f))
+            .border(
+                if (selected) 2.dp else 0.dp,
+                when {
+                    filled -> theme.text.copy(alpha = 0.85f)
+                    selected -> theme.primary.copy(alpha = 0.8f)
+                    else -> Color.Transparent
+                },
+                RoundedCornerShape(6.dp),
+            )
             .clickable(enabled = enabled) { onClick() }
             .padding(horizontal = 12.dp, vertical = 8.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(label, color = textColor ?: (if (selected) theme.onPrimary else theme.text), fontSize = 10.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.SemiBold)
+        Text(
+            if (selected && check) "✓ $label" else label,
+            color = textColor ?: (if (filled) theme.onPrimary else theme.text),
+            fontSize = 10.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.SemiBold, maxLines = 1,
+        )
     }
 }
 
@@ -154,7 +178,8 @@ fun TdpProfileCard(
     onSelectProfile: (String) -> Unit,
     onSelectCustomProfile: (Float) -> Unit,
     onSliderChange: (Float) -> Unit,
-    onSavePreset: (String, Float) -> Unit,
+    /** `null` = sem gravação aqui (os perfis vivem no cartão "Perfis guardados"). */
+    onSavePreset: ((String, Float) -> Unit)? = null,
 ) {
     var presetName by remember { mutableStateOf("") }
     val selectedFixed = TdpProfiles.byId(tdpProfileId)
@@ -177,6 +202,7 @@ fun TdpProfileCard(
                         enabled = enabled,
                         theme = theme,
                         modifier = Modifier.weight(1f),
+                        check = true,
                     ) { onSelectProfile(profile.id) }
                 }
             }
@@ -201,6 +227,7 @@ fun TdpProfileCard(
                             selected = tdpProfileId == TdpProfiles.ID_CUSTOM && tdpValue == prof.v1,
                             enabled = enabled,
                             theme = theme,
+                            check = true,
                         ) { onSelectCustomProfile(prof.v1) }
                     }
                 }
@@ -229,6 +256,7 @@ fun TdpProfileCard(
                     Text(line, color = theme.primary.copy(alpha = 0.85f), fontFamily = theme.fontFamily, fontSize = 10.sp)
                 }
             }
+            if (onSavePreset != null) {
             Spacer(modifier = Modifier.height(12.dp))
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 OutlinedTextField(value = presetName, onValueChange = { presetName = it }, label = { Text(if (isEn) "Preset Name" else "Nome do Preset TDP", fontSize = 10.sp) }, modifier = Modifier.weight(1f).height(50.dp), textStyle = TextStyle(fontSize = 12.sp, color = theme.text), enabled = enabled)
@@ -238,6 +266,7 @@ fun TdpProfileCard(
                     modifier = Modifier.height(50.dp),
                     enabled = enabled,
                 ) { Text(if (isEn) "Save" else "Salvar", fontSize = 11.sp, color = theme.onPrimary) }
+            }
             }
         }
     }
@@ -283,7 +312,13 @@ fun ClockChipRow(
         }
     }
     Spacer(modifier = Modifier.height(4.dp))
-    Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+    // A linha rola sozinha até ao chip escolhido: num painel estreito (overlay) o 3072 MHz ficava
+    // fora de vista e parecia que nenhum clock estava selecionado.
+    val scroll = rememberScrollState()
+    var selectedX by remember { mutableStateOf<Int?>(null) }
+    val lead = with(LocalDensity.current) { 24.dp.roundToPx() }
+    LaunchedEffect(selectedX, showAll) { selectedX?.let { scroll.animateScrollTo((it - lead).coerceAtLeast(0)) } }
+    Row(modifier = Modifier.fillMaxWidth().horizontalScroll(scroll), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
         for (mhz in visible) {
             val isOc = ocAboveMHz != null && mhz > ocAboveMHz
             PerfChip(
@@ -291,11 +326,8 @@ fun ClockChipRow(
                 selected = highlighted == mhz,
                 enabled = enabled,
                 theme = theme,
-                textColor = when {
-                    highlighted == mhz -> theme.onPrimary
-                    isOc -> theme.warning
-                    else -> theme.text
-                },
+                textColor = if (isOc && highlighted != mhz) theme.warning else null,
+                modifier = if (highlighted == mhz) Modifier.onGloballyPositioned { selectedX = it.positionInParent().x.toInt() } else Modifier,
             ) { onSelect(mhz) }
         }
     }
@@ -320,7 +352,8 @@ fun ManualClockCard(
     isEn: Boolean,
     /** (perf, prime, gpu, eficiência) em MHz. */
     onClocks: (Float, Float, Float, Float) -> Unit,
-    onSavePreset: (String, Float, Float, Float, Float) -> Unit,
+    /** `null` = sem gravação aqui (os perfis vivem no cartão "Perfis guardados"). */
+    onSavePreset: ((String, Float, Float, Float, Float) -> Unit)? = null,
     /** Fixo/livre por cluster e GPU (ver ClockPin); `null` = não mostrar. */
     pinMask: Int? = null,
     clusterKinds: List<com.dfdx047.odinhub.tools.hardware.ClusterKind> = emptyList(),
@@ -443,6 +476,7 @@ fun ManualClockCard(
                 ClockPinRow(pinMask, clusterKinds, hasGpu = true, theme = theme, isEn = isEn, enabled = enabled, onChange = onPinChange)
             }
 
+            if (onSavePreset != null) {
             Spacer(modifier = Modifier.height(12.dp))
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 OutlinedTextField(value = presetName, onValueChange = { presetName = it }, label = { Text(if (isEn) "Preset Name" else "Nome do Preset Clocks", fontSize = 10.sp) }, modifier = Modifier.weight(1f).height(50.dp), textStyle = TextStyle(fontSize = 12.sp, color = theme.text), enabled = enabled)
@@ -452,6 +486,7 @@ fun ManualClockCard(
                     modifier = Modifier.height(50.dp),
                     enabled = enabled,
                 ) { Text(if (isEn) "Save" else "Salvar", fontSize = 11.sp, color = theme.onPrimary) }
+            }
             }
         }
     }

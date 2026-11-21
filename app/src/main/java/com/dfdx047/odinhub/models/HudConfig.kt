@@ -19,6 +19,8 @@ enum class HudMetric(val id: String, val labelEn: String, val labelPt: String) {
     BATTERY_TEMP("battery_temp", "Battery temperature", "Temperatura da bateria"),
     TDP("tdp", "TDP target", "Alvo de TDP"),
     CLOCK("clock", "Time", "Hora"),
+    /** Perfil guardado em uso (o ligado ao jogo, ou o global ativo). */
+    PROFILE("profile", "Active profile", "Perfil ativo"),
     ;
 
     fun label(isEn: Boolean): String = if (isEn) labelEn else labelPt
@@ -98,7 +100,7 @@ data class HudConfig(
 
     companion object {
         val TEXT_SCALES = listOf(0.8f, 1f, 1.25f)
-        const val MIN_SCALE = 0.6f
+        const val MIN_SCALE = 0.8f
         const val MAX_SCALE = 2.5f
 
         /** Tamanho válido: dentro dos limites e arredondado a 0.05 (não grava 1.2371...). */
@@ -139,6 +141,10 @@ data class HudSnapshot(
     val batteryPercent: Int? = null,
     val batteryTempC: Float? = null,
     val tdpTargetW: Float? = null,
+    /** Nome do perfil em uso; "" = ajustes sem perfil; `null` = métrica desligada. */
+    val profileName: String? = null,
+    /** O perfil vem do jogo (ligado a ele) e não do global. */
+    val profileFromGame: Boolean = false,
 )
 
 /** Cálculos puros do HUD (testáveis sem Android). */
@@ -385,7 +391,7 @@ object HudPresets {
         Group("FRAMES", "QUADROS", listOf(HudMetric.FPS, HudMetric.FRAMETIME, HudMetric.FPS_LOW, HudMetric.FPS_GRAPH)),
         Group("CPU", "CPU", listOf(HudMetric.CPU_USAGE, HudMetric.CPU_TEMP, HudMetric.CPU_CLUSTERS, HudMetric.CPU_CORES)),
         Group("GPU", "GPU", listOf(HudMetric.GPU_LOAD, HudMetric.GPU_TEMP, HudMetric.GPU_FREQ)),
-        Group("SYSTEM", "SISTEMA", listOf(HudMetric.RAM, HudMetric.POWER, HudMetric.TDP, HudMetric.BATTERY, HudMetric.BATTERY_TEMP, HudMetric.CLOCK)),
+        Group("SYSTEM", "SISTEMA", listOf(HudMetric.PROFILE, HudMetric.RAM, HudMetric.POWER, HudMetric.TDP, HudMetric.BATTERY, HudMetric.BATTERY_TEMP, HudMetric.CLOCK)),
     )
 
     /** Liga/desliga uma métrica, mantendo a ordem do enum (a ordem em que o HUD as desenha). */
@@ -410,5 +416,6 @@ object HudPresets {
         HudMetric.BATTERY_TEMP -> if (isEn) "Batt. temp" else "Temp. bat."
         HudMetric.TDP -> "TDP"
         HudMetric.CLOCK -> if (isEn) "Time" else "Hora"
+        HudMetric.PROFILE -> if (isEn) "Profile" else "Perfil"
     }
 }

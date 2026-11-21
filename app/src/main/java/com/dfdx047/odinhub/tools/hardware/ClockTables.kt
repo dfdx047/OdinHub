@@ -20,6 +20,16 @@ data class ClockTables(
     val effMHz: List<Int> = emptyList(),
 ) {
     val isEmpty: Boolean get() = perfMHz.isEmpty() && primeMHz.isEmpty() && gpuMHz.isEmpty()
+
+    /**
+     * Valor guardado que não existe nesta tabela (ex: clocks de um Odin 3 restaurados num Odin 2
+     * Mini -- Prime 4320 MHz, GPU 389 MHz) passa ao degrau real mais alto que não o ultrapasse
+     * (ou ao primeiro). 0 = "não definido" e fica 0.
+     */
+    fun snapTo(mhz: Float, table: List<Int>): Float {
+        if (mhz <= 0f || table.isEmpty() || table.any { it == mhz.toInt() }) return mhz
+        return (table.filter { it <= mhz }.maxOrNull() ?: table.min()).toFloat()
+    }
     val hasEfficiencyCluster: Boolean get() = effMHz.isNotEmpty()
 
     companion object {

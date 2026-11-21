@@ -46,6 +46,85 @@ private fun String.containsShellMetacharacters(): Boolean = any { it in SHELL_ME
 /** Aspas simples de shell: `it's` -> `'it'\''s'`. Para qualquer texto não-constante num comando root. */
 fun shellQuote(value: String): String = "'" + value.replace("'", "'\\''") + "'"
 
+/** Por onde os comandos root saem. */
+enum class RootBackend { PSERVER, SU, NONE }
+
+/**
+ * Sessão `su` persistente (KernelSU / Magisk). Um único processo `su` para a vida da app: cada
+ * comando é escrito no stdin e a saída lê-se até um marcador. Lançar um `su` por comando custava
+ * ~30-60 ms e, com o daemon de clocks, dezenas de processos por minuto.
+ *
+ * O stdout é lido numa thread própria para uma fila: assim um comando que bloqueie (um nó de
+ * sysfs que nunca devolve) não prende quem chamou -- ao fim de [timeoutMs] a sessão é morta e a
+ * seguinte arranca do zero.
+ */
+private class SuSession private constructor(private val process: Process) {
+    private val stdin = process.outputStream.bufferedWriter()
+    private val lines = java.util.concurrent.LinkedBlockingQueue<String>()
+    @Volatile var alive = true
+        private set
+    private var seq = 0L
+
+    init {
+        Thread({
+            runCatching { process.inputStream.bufferedReader().forEachLine { lines.put(it) } }
+            alive = false
+            lines.put(EOF)
+        }, "odinhub-su-out").apply { isDaemon = true }.start()
+        // O stderr tem de ser drenado, senão o buffer enche e o `su` bloqueia.
+        Thread({ runCatching { val buf = ByteArray(1024); val err = process.errorStream; while (err.read(buf) >= 0) Unit } }, "odinhub-su-err")
+            .apply { isDaemon = true }.start()
+    }
+
+    fun run(cmd: String, timeoutMs: Long = 10_000L): Result<String?> {
+        if (!alive) return Result.failure(IllegalStateException("su session closed"))
+        val marker = "__ODH_${++seq}__"
+        return try {
+            lines.clear()
+            // `echo` sozinho fecha uma última linha sem '\n'; o marcador vai numa linha própria.
+            stdin.write("$cmd\necho\necho $marker\n")
+            stdin.flush()
+            val out = StringBuilder()
+            val deadline = System.currentTimeMillis() + timeoutMs
+            while (true) {
+                val left = deadline - System.currentTimeMillis()
+                val line = if (left > 0) lines.poll(left, java.util.concurrent.TimeUnit.MILLISECONDS) else null
+                if (line == null) {
+                    close()
+                    return Result.failure(java.util.concurrent.TimeoutException("su: sem resposta em ${timeoutMs} ms: $cmd"))
+                }
+                if (line == EOF) return Result.failure(IllegalStateException("su session died"))
+                if (line == marker) break
+                out.append(line).append('\n')
+            }
+            Result.success(out.toString().trim().takeIf { it.isNotEmpty() && it != "null" })
+        } catch (e: Exception) {
+            close()
+            Result.failure(e)
+        }
+    }
+
+    fun close() {
+        alive = false
+        runCatching { stdin.close() }
+        runCatching { process.destroy() }
+    }
+
+    companion object {
+        private const val EOF = "\u0000EOF"
+
+        /** Abre o `su` e confirma que é mesmo root (`id -u` = 0). `null` = sem root concedido. */
+        fun open(): SuSession? {
+            val process = runCatching { ProcessBuilder("su").start() }.getOrNull() ?: return null
+            val session = SuSession(process)
+            val uid = session.run("id -u", timeoutMs = 4_000L).getOrNull()?.trim()
+            if (uid == "0") return session
+            session.close()
+            return null
+        }
+    }
+}
+
 @Singleton
 @SuppressLint("DiscouragedPrivateApi", "PrivateApi")
 class ShellExecutor @Inject constructor() {
@@ -58,26 +137,47 @@ class ShellExecutor @Inject constructor() {
     @Volatile
     private var binder: IBinder? = lookupBinder()
 
-    val pServerAvailable: Boolean get() = currentBinder() != null
+    /**
+     * Há como correr comandos root? Barato (sem I/O) para poder ser lido na thread principal: o
+     * PServer registado, ou uma sessão `su` já aberta. A escolha real do caminho é feita no
+     * primeiro comando (ver [resolveBackend]).
+     */
+    val pServerAvailable: Boolean get() = backend == RootBackend.SU || (backend != RootBackend.NONE && currentBinder() != null)
 
     /**
      * Segundo elemento do pedido ao PServer: "1" = devolver a saída do comando, "0" = sem saída.
-     * Há firmwares (o Odin 2 Mini é o caso conhecido) em que os pedidos com captura de saída não
-     * correm de forma fiável. Testamos uma vez; se a captura não funcionar passamos a "0" e as
-     * leituras fazem-se diretamente aos ficheiros (os nós de sysfs são legíveis sem root).
+     * Há firmwares em que os pedidos com captura de saída não correm de forma fiável. Testamos uma
+     * vez; se a captura não funcionar passamos a "0" e as leituras fazem-se diretamente aos
+     * ficheiros (os nós de sysfs são legíveis sem root).
      */
     @Volatile
     private var captureFlag = "1"
 
+    /**
+     * Caminho escolhido. `null` = ainda não decidido.
+     *
+     * ODIN 2 MINI (fw 1.0.0.117, Android 13): o SELinux do firmware NÃO deixa uma app normal
+     * (`untrusted_app`) falar com o PServer -- o kernel recusa a transação com EPERM
+     * ("binder: transaction failed 29201/-1" no dmesg; na app aparece como DeadObjectException
+     * com o pservice vivo). Só as apps de sistema da AYN (`system_app`) passam. Sem um plano B,
+     * NENHUMA escrita da app chegava ao hardware nesse aparelho. Aí usa-se o `su` do KernelSU
+     * (a app tem de ter Superusuário concedido no gestor do KernelSU).
+     */
     @Volatile
-    private var captureProbed = false
+    private var backend: RootBackend? = null
 
-    /** `false` quando o PServer deste firmware não devolve a saída dos comandos. */
+    @Volatile
+    private var su: SuSession? = null
+
+    /** `false` quando o caminho root deste firmware não devolve a saída dos comandos. */
     val outputCaptureWorks: Boolean
         get() {
-            probeCaptureIfNeeded()
-            return captureFlag == "1"
+            val b = resolveBackend()
+            return b == RootBackend.SU || (b == RootBackend.PSERVER && captureFlag == "1")
         }
+
+    /** Caminho root em uso (resolve-o se ainda não foi). Bloqueante na primeira chamada. */
+    val rootBackend: RootBackend get() = resolveBackend()
 
     private fun lookupBinder(): IBinder? = runCatching {
         val serviceManager = Class.forName("android.os.ServiceManager")
@@ -91,37 +191,91 @@ class ShellExecutor @Inject constructor() {
         return lookupBinder().also { binder = it }
     }
 
+    /**
+     * Decide o caminho uma vez: PServer (com ou sem captura de saída) se aceitar transações; senão
+     * `su`; senão nenhum. Sem binder E sem `su` não se marca como decidido -- o PServer pode ainda
+     * não estar registado (BOOT_COMPLETED cedo) e tenta-se outra vez no comando seguinte.
+     */
     @Synchronized
-    private fun probeCaptureIfNeeded() {
-        if (captureProbed) return
-        // Sem binder (ainda) não se marca a prova como feita: tenta-se de novo quando existir.
-        val b = currentBinder() ?: return
-        captureProbed = true
-        val first = transactRaw(b, "echo $PROBE_TOKEN", "1")
-        if (first.getOrNull()?.contains(PROBE_TOKEN) == true) return
-        // Segunda prova, com um comando externo: só desistimos da captura se as duas falharem.
-        val second = transactRaw(b, "cat /proc/sys/kernel/random/boot_id", "1")
-        if (!second.getOrNull().isNullOrBlank()) return
-        captureFlag = "0"
-        Log.w(TAG, "PServer sem captura de saída neste firmware: a usar o modo '0' (leituras diretas)")
+    private fun resolveBackend(): RootBackend {
+        backend?.let { return it }
+        val b = currentBinder()
+        if (b != null) {
+            val first = transactRaw(b, "echo $PROBE_TOKEN", "1")
+            if (first.isSuccess) {
+                if (first.getOrNull()?.contains(PROBE_TOKEN) != true) {
+                    // Segunda prova, com um comando externo: só se desiste da captura se as duas falharem.
+                    val second = transactRaw(b, "cat /proc/sys/kernel/random/boot_id", "1")
+                    if (second.getOrNull().isNullOrBlank()) {
+                        captureFlag = "0"
+                        Log.w(TAG, "PServer sem captura de saída neste firmware: a usar o modo '0' (leituras diretas)")
+                    }
+                }
+                backend = RootBackend.PSERVER
+                Log.i(TAG, "Root pelo PServer (captura=${captureFlag == "1"})")
+                return RootBackend.PSERVER
+            }
+            Log.w(TAG, "PServer recusa a app (SELinux?): ${first.exceptionOrNull()?.javaClass?.simpleName} -- a tentar su")
+        }
+        val session = SuSession.open()
+        if (session != null) {
+            su = session
+            backend = RootBackend.SU
+            Log.i(TAG, "Root pelo su (KernelSU/Magisk)")
+            return RootBackend.SU
+        }
+        if (b != null) {
+            // Binder existe mas recusa, e não há su: não vale a pena repetir a prova a cada comando.
+            backend = RootBackend.NONE
+            Log.e(TAG, "Sem root: o PServer recusa a app e o su não está concedido")
+        }
+        return RootBackend.NONE
+    }
+
+    /** Volta a decidir o caminho (ex: o utilizador acabou de conceder Superusuário). */
+    @Synchronized
+    fun retryRoot() {
+        if (backend == RootBackend.NONE) backend = null
     }
 
     /**
-     * O PServerBinder da AYN corre como root (uid 0): tudo o que a app escreve em sysfs -- TDP,
-     * clocks, GPU, ventoinha, limite térmico -- passa por ele. Por isso a app NÃO usa `su` nem
-     * KernelSU/Magisk em lado nenhum (o antigo interruptor "Usar KernelSU" e o caminho `su -c`
-     * foram removidos: além de desnecessários, o `su -c id` de deteção fazia aparecer um pedido
-     * de root a cada arranque em aparelhos com KernelSU).
+     * O PServerBinder da AYN corre como root (uid 0): no Odin 3 tudo o que a app escreve em sysfs
+     * -- TDP, clocks, GPU, ventoinha, limite térmico -- passa por ele, sem `su`. Onde o firmware
+     * não deixa (Odin 2 Mini, ver [backend]), usa-se uma sessão `su` persistente.
      */
     val canWriteSysfs: Boolean get() = pServerAvailable
 
     fun executeAsRoot(cmd: String): Result<String?> {
+        return when (resolveBackend()) {
+            RootBackend.SU -> runSu(cmd)
+            RootBackend.PSERVER -> runPServer(cmd)
+            RootBackend.NONE -> {
+                Log.w(TAG, "executeAsRoot: sem caminho root, comando descartado: $cmd")
+                Result.failure(IllegalStateException("no root backend"))
+            }
+        }
+    }
+
+    private fun runSu(cmd: String): Result<String?> = synchronized(suLock) {
+        val session = su?.takeIf { it.alive } ?: SuSession.open().also { su = it }
+            ?: return Result.failure(IllegalStateException("su indisponível"))
+        val r = session.run(cmd)
+        if (r.isFailure && !session.alive) {
+            // A sessão morreu a meio (timeout / processo morto): uma nova e uma segunda tentativa.
+            val fresh = SuSession.open().also { su = it } ?: return r
+            return fresh.run(cmd)
+        }
+        r
+    }
+
+    private val suLock = Any()
+
+    private fun runPServer(cmd: String): Result<String?> {
         val localBinder = currentBinder()
         if (localBinder == null) {
             Log.w(TAG, "executeAsRoot: PServerBinder indisponível, comando descartado: $cmd")
             return Result.failure(IllegalStateException("PServerBinder not available"))
         }
-        probeCaptureIfNeeded()
         val result = transactRaw(localBinder, cmd, captureFlag)
         // Binder morto (o PServer reiniciou): pede-o de novo e tenta uma vez.
         if (result.exceptionOrNull() is android.os.DeadObjectException) {
@@ -140,15 +294,13 @@ class ShellExecutor @Inject constructor() {
 
             val delivered = runCatching { localBinder.transact(0, data, reply, 0) }
                 .getOrElse {
-                    Log.e(TAG, "executeAsRoot: transact() lançou exceção para '$cmd'", it)
+                    Log.e(TAG, "executeAsRoot: transact() lançou exceção para '$cmd': $it")
                     return Result.failure(it)
                 }
 
-            // CAUSA RAIZ: transact() devolve `false` (sem lançar exceção) quando o binder
-            // remoto rejeita ou não consegue processar a transação. O código original nunca
-            // verificava este valor, pelo que o comando falhava em silêncio e o chamador via
-            // um "sucesso" com resultado nulo. Isto explica por que os sliders da UI mudavam
-            // mas os nós de sysfs (TDP/clocks/GPU) não eram realmente escritos.
+            // transact() devolve `false` (sem lançar exceção) quando o binder remoto rejeita ou
+            // não consegue processar a transação -- antes era ignorado e o comando falhava em
+            // silêncio com um "sucesso" nulo.
             if (!delivered) {
                 Log.e(TAG, "executeAsRoot: transact() devolveu false para '$cmd'")
                 return Result.failure(PServerTransactionRejectedException(cmd))

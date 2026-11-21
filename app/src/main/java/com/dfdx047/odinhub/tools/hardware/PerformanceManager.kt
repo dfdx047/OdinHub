@@ -246,6 +246,7 @@ class PerformanceManager @Inject constructor(
         policies = scanCpuPolicies()
         clusters = CpuHotplug.clustersFrom(policies.map { it.cpus to it.cpuinfoMaxFreqKHz })
         restorePinBackupsFromPrefs()
+        watchFirmwareMode()
         // Arranque: um processo anterior pode ter morrido com núcleos desligados -- liga tudo. Se
         // houver um jogo à frente, o serviço de acessibilidade volta a aplicar a regra dele.
         synchronized(writeLock) { applyHotplug(CpuHotplug.ALL_ONLINE) }
@@ -466,6 +467,7 @@ class PerformanceManager @Inject constructor(
             policies, perfRatio, primeRatio, minRatio, effRatio, pinMask,
             currentMinKHz = { path -> readLocal(path)?.toLongOrNull() },
             onlineCpus = online,
+            guardFloors = device.guardFirmwareFloors,
         )
         // Backups dos pisos antes de lhes mexer (para os devolver ao libertar / no Stock).
         cpuOps.filter { it.isFloorOp() }.forEach { backupPinNode(it.targetPath) }
@@ -484,6 +486,14 @@ class PerformanceManager @Inject constructor(
         )
         gpuOps.filter { it.isFloorOp() }.forEach { backupPinNode(it.targetPath) }
         ops += gpuOps.map { if (it.label.endsWith("-min")) it.asFreeFloor() else it }
+        // Odin 2 Mini: o piso do devfreq (o que o pservice sobe para 401/692 MHz) vai ao fundo e
+        // fica trancado. Com a GPU fixada quem manda é o min_clock_mhz do kgsl, por isso também.
+        if (device.guardFirmwareFloors && gpu is GpuControl.Kgsl) {
+            PerformanceCommandBuilder.buildGpuFloorGuardOp(gpu.availableHz.minOrNull())?.let { op ->
+                backupPinNode(op.targetPath)
+                ops += op
+            }
+        }
 
         // 4. Pisos em que mexemos antes e já não é preciso: devolve-os (valor e permissões de
         // origem). Um piso baixado no ciclo anterior continua "em uso" enquanto o teto o exigir.
@@ -492,7 +502,10 @@ class PerformanceManager @Inject constructor(
         val releaseOps = releasePinsExcept(stillTouched)
 
         val failures = (ops + releaseOps).mapNotNull { op ->
-            runCatching { applyWriteOp(op) }.getOrElse {
+            // Piso trancado que alguém destrancou (ou que ainda não é nosso): reescreve-o já, em
+            // vez de confiar no "já pedido" em cache. Só um stat, sem root.
+            val force = op.label.endsWith("-guard") && currentModeOf(op.targetPath) != HardwareWriteOp.LOCKED_MODE
+            runCatching { applyWriteOp(op, force = force) }.getOrElse {
                 Log.w(TAG, "enforce: ${op.label}", it)
                 null
             }
@@ -510,13 +523,14 @@ class PerformanceManager @Inject constructor(
      */
     private fun repairLockedFloors() {
         val nodes = policies.map { "${it.policyPath}/scaling_min_freq" to HardwareWriteOp.DEFAULT_RESTORE_MODE } +
-            listOfNotNull((PerformanceCommandBuilder.GPU_MIN_MHZ_PATH to "644").takeIf { gpu is GpuControl.Kgsl })
+            listOfNotNull((PerformanceCommandBuilder.GPU_MIN_MHZ_PATH to "644").takeIf { gpu is GpuControl.Kgsl }) +
+            listOfNotNull((PerformanceCommandBuilder.GPU_DEVFREQ_MIN_PATH to "660").takeIf { gpu is GpuControl.Kgsl && device.guardFirmwareFloors })
         nodes.forEach { (path, mode) ->
             if (currentModeOf(path) == HardwareWriteOp.LOCKED_MODE) executor.executeAsRoot("chmod $mode $path")
         }
     }
 
-    private fun HardwareWriteOp.isFloorOp(): Boolean = label.endsWith("-pin") || label.endsWith("-min")
+    private fun HardwareWriteOp.isFloorOp(): Boolean = label.endsWith("-pin") || label.endsWith("-min") || label.endsWith("-guard")
 
     /**
      * Piso "livre" (o governador decide): sem verificação (o firmware pode sobrepô-lo) e com as
@@ -579,6 +593,15 @@ class PerformanceManager @Inject constructor(
         ops.forEach { op ->
             runCatching { applyWriteOp(op, force = true) }.onFailure { Log.w(TAG, "hotplug: ${op.label}", it) }
         }
+        // Uma política que volta a ter núcleos ligados volta com os limites do kernel (no Odin 2
+        // Mini, o Prime voltava a 3187 MHz): esquece o "já escrito" dela para os tetos/pisos serem
+        // reescritos já nesta passagem, e não só na reafirmação seguinte.
+        val cameOnline = ops.filter { it.value == "1" }.mapNotNull { it.label.removePrefix("cpu").substringBefore('-').toIntOrNull() }.toSet()
+        if (cameOnline.isNotEmpty()) {
+            policies.filter { p -> p.cpus.any { it in cameOnline } }.forEach { p ->
+                lastResults.keys.removeAll { it.startsWith(p.policyPath + "/") }
+            }
+        }
         // Verificação ESTRITA pelo estado real (a regra genérica "abaixo do pedido = limite do
         // kernel" de applyWriteOp aceitaria um "1" que ficou "0").
         val after = readOnlineMap()
@@ -615,7 +638,9 @@ class PerformanceManager @Inject constructor(
         private set
 
     fun refreshCoreStates() {
-        val floors = firmwareCpuFloors()
+        // Nos aparelhos com os pisos guardados, o msm_performance só tem os impulsos de toque do
+        // perf HAL (momentâneos, e o teto ganha-lhes no kernel 5.15): não são "pisos" a explicar.
+        val floors = if (device.guardFirmwareFloors) emptyMap() else firmwareCpuFloors()
         _firmwareFloors.value = clusters.mapNotNull { c ->
             val khz = c.cpus.firstOrNull()?.let { floors[it] }?.takeIf { it > 0 } ?: return@mapNotNull null
             c.kind to (khz / 1000).toInt()
@@ -672,7 +697,10 @@ class PerformanceManager @Inject constructor(
             }
             val cap = if (capToCurrent) capPath?.let { readLocal(it)?.toLongOrNull() } else null
             val restored = value.toLongOrNull()?.let { v -> if (cap != null && v > cap) cap.toString() else value } ?: value
-            HardwareWriteOp("pin-release", path, restored, mode ?: HardwareWriteOp.DEFAULT_RESTORE_MODE)
+            // Pisos guardados (Odin 2 Mini): a leitura inclui os impulsos do perf HAL, por isso
+            // não se verifica -- escreve-se e devolvem-se as permissões.
+            val isGuarded = device.guardFirmwareFloors && (path.endsWith("scaling_min_freq") || path == PerformanceCommandBuilder.GPU_DEVFREQ_MIN_PATH)
+            HardwareWriteOp("pin-release", path, restored, mode ?: HardwareWriteOp.DEFAULT_RESTORE_MODE, verify = !isGuarded)
         }
         release.forEach { pinBackups.remove(it) }
         savePinBackups()
@@ -710,12 +738,59 @@ class PerformanceManager @Inject constructor(
         }
         // Pisos fixados: devolvidos depois dos tetos voltarem ao máximo.
         // Sem cortar ao teto atual: os tetos acabaram de voltar ao máximo (ops acima, mesma lista).
-        ops += releasePinsExcept(emptySet(), capToCurrent = false)
+        val released = releasePinsExcept(emptySet(), capToCurrent = false)
+        ops += released
         val failures = ops.mapNotNull { op -> runCatching { applyWriteOp(op, force = op.lockMode != null) }.getOrNull() }.filterNot { it.ok }
         _lastApplyStatus.value = hotplugFailures + failures
         repairLockedFloors()
+        // Odin 2 Mini: os pisos guardados foram lidos com os impulsos do perf HAL por cima (podiam
+        // ser o máximo). Em vez de confiar neles, pede ao firmware que reaplique o SEU modo de
+        // desempenho -- o pservice só o faz quando `performance_mode` muda, daí ida e volta.
+        if (device.guardFirmwareFloors && released.isNotEmpty()) reapplyFirmwarePerformanceMode()
         refreshCoreStates()
         appliedTargets = targets.get()
+    }
+
+    /** Ida e volta em `performance_mode` (ver applyStockOnce). Bloqueante (~0.6 s, root). */
+    private fun reapplyFirmwarePerformanceMode() {
+        val mode = runCatching { android.provider.Settings.System.getInt(context.contentResolver, AYN_PERFORMANCE_MODE) }.getOrNull() ?: return
+        ignoreModeChangesUntil = System.currentTimeMillis() + 3_000L
+        executor.setIntSystemSetting(AYN_PERFORMANCE_MODE, if (mode == 0) 1 else 0)
+        Thread.sleep(600)
+        executor.setIntSystemSetting(AYN_PERFORMANCE_MODE, mode)
+        Log.i(TAG, "Stock: modo de desempenho da AYN ($mode) reaplicado pelo firmware")
+    }
+
+    // ------------------------------------------------------------------ vigia do firmware
+
+    @Volatile private var ignoreModeChangesUntil = 0L
+
+    /**
+     * O pservice da AYN reescreve tetos/pisos quando `performance_mode` muda (botão rápido, Game
+     * Assistant por jogo). Os nós que mandamos estão trancados e ele não passa, mas acorda-se o
+     * daemon logo a seguir para confirmar (e reescrever o que não estiver trancado) em vez de
+     * esperar pela reafirmação periódica.
+     */
+    private fun watchFirmwareMode() {
+        if (!device.guardFirmwareFloors) return
+        runCatching {
+            val observer = object : android.database.ContentObserver(android.os.Handler(android.os.Looper.getMainLooper())) {
+                override fun onChange(selfChange: Boolean) {
+                    if (System.currentTimeMillis() < ignoreModeChangesUntil) return
+                    if (targets.get().mode == PerfMode.STOCK) return
+                    Log.i(TAG, "performance_mode mudou (AYN): a reafirmar o perfil")
+                    scope.launch {
+                        delay(400)
+                        wake.trySend(Unit)
+                        delay(1_500)
+                        wake.trySend(Unit)
+                    }
+                }
+            }
+            context.contentResolver.registerContentObserver(
+                android.provider.Settings.System.getUriFor(AYN_PERFORMANCE_MODE), false, observer,
+            )
+        }.onFailure { Log.w(TAG, "watchFirmwareMode", it) }
     }
 
     /**
@@ -867,6 +942,8 @@ class PerformanceManager @Inject constructor(
             "/sys/module/msm_performance/parameters/cpu_min_freq",
         )
         const val BATTERY = "/sys/class/power_supply/battery"
+        /** Modo de desempenho da AYN (0 Normal, 1 Desempenho, 2 Alto) -- ver watchFirmwareMode. */
+        const val AYN_PERFORMANCE_MODE = "performance_mode"
 
         const val TDP_SAMPLES = 4
 

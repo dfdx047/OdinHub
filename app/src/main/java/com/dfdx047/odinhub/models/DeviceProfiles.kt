@@ -3,11 +3,17 @@ package com.dfdx047.odinhub.models
 import com.dfdx047.odinhub.tools.hardware.ClockTables
 
 /**
- * Odin Hub é exclusivo do **AYN Odin 3** (Snapdragon 8 Elite, SM8750 / CQ8725S, "sun").
+ * Odin Hub corre em dois aparelhos AYN, cada um com o seu perfil:
  *
- * Valores lidos no próprio aparelho (firmware Odin3_BV1.0.0.188): policy0 = cpu0-5 (Oryon M,
- * 384..3532 MHz), policy6 = cpu6-7 (Oryon L, 1017..4320 MHz), Adreno 830 160..1100 MHz. Sem
- * `msm_performance` (o firmware não impõe pisos de CPU por módulo).
+ *  - **Odin 3** (Snapdragon 8 Elite, SM8750 / CQ8725S, "sun"). Lido no aparelho (fw
+ *    Odin3_BV1.0.0.188): policy0 = cpu0-5 (Oryon M, 384..3532 MHz), policy6 = cpu6-7 (Oryon L,
+ *    1017..4320 MHz), Adreno 830 160..1100 MHz.
+ *  - **Odin 2 Mini** (Snapdragon 8 Gen 2, QCS8550, "kalama"). Lido no aparelho (fw
+ *    Odin2Mini_V1.0.0.117, kernel 5.15): policy0 = cpu0-2 (3x A510, 307..2016 MHz), policy3 =
+ *    cpu3-6 (2x A715 + 2x A710, 499..2803 MHz), policy7 = cpu7 (X3, 595..3187 MHz), Adreno 740
+ *    220..692 MHz (tabela IoT da AYN). O `pservice` da AYN reescreve tetos E pisos a cada troca de
+ *    `performance_mode` (até o modo Normal põe pisos de 902/1651/1843 MHz e a GPU a 401 MHz) --
+ *    ver [DeviceProfile.guardFirmwareFloors].
  */
 enum class SocFamily(
     val label: String,
@@ -21,6 +27,9 @@ enum class SocFamily(
 ) {
     /** Snapdragon 8 Elite (SM8750 / CQ8725S, "sun") -- Odin 3. */
     SM8750("Snapdragon 8 Elite", "6× Oryon M", "2× Oryon L", "Adreno 830"),
+
+    /** Snapdragon 8 Gen 2 (QCS8550 / SM8550, "kalama") -- Odin 2 Mini. */
+    KALAMA("Snapdragon 8 Gen 2", "2× A715 + 2× A710", "1× X3", "Adreno 740", "3× A510"),
 
     /** Outro aparelho: a app corre, mas só com as tabelas vivas do kernel (não suportado). */
     UNKNOWN("SoC", "", "", "GPU"),
@@ -71,6 +80,16 @@ data class DeviceProfile(
      * "OC" na UI e nunca são usadas pelo AutoTDP (ver GpuOc).
      */
     val stockGpuMaxMHz: Int? = null,
+    /**
+     * O firmware reescreve os PISOS dos clocks por conta própria (o `pservice` da AYN no Odin 2
+     * Mini: pisos de CPU e `devfreq/min_freq` da GPU a cada troca de modo de desempenho, e o
+     * gameassistant por jogo). Com isto ligado, fora do Stock a app desce os pisos ao fundo da
+     * tabela e TRANCA-OS (0444, o pservice não tem dac_override e não consegue escrever por cima),
+     * tal como já fazia com os tetos. Sem isto um perfil "económico" ficava preso a 1.8 GHz no X3.
+     */
+    val guardFirmwareFloors: Boolean = false,
+    /** Tema exclusivo do aparelho (índice em AvailableThemes) usado numa instalação nova. */
+    val defaultThemeIndex: Int = 1,
 )
 
 /** Identificação crua do aparelho, lida de `android.os.Build` e das system properties. */
@@ -107,7 +126,23 @@ object SocTables {
         source = ClockTables.SOURCE_FALLBACK,
     )
 
-    fun forSoc(@Suppress("UNUSED_PARAMETER") soc: SocFamily): ClockTables = SM8750
+    /**
+     * 8 Gen 2 do Odin 2 Mini (fw 1.0.0.117): policy0 3x A510 até 2016, policy3 (2x A715 + 2x A710)
+     * até 2803, policy7 X3 até 3187 MHz. Adreno 740 com a tabela IoT da AYN: 220..692 MHz (o
+     * 124.8 MHz existe na tabela mas o `min_pwrlevel` do kgsl não o deixa usar).
+     */
+    val KALAMA = ClockTables(
+        perfMHz = kHz(499200, 614400, 729600, 844800, 940800, 1056000, 1171200, 1286400, 1401600, 1536000, 1651200, 1785600, 1920000, 2054400, 2188800, 2323200, 2457600, 2592000, 2707200, 2803200),
+        primeMHz = kHz(595200, 729600, 864000, 998400, 1132800, 1248000, 1363200, 1478400, 1593600, 1708800, 1843200, 1977600, 2092800, 2227200, 2342400, 2476800, 2592000, 2726400, 2841600, 2956800, 3187200),
+        gpuMHz = listOf(220, 295, 348, 401, 475, 550, 615, 692),
+        source = ClockTables.SOURCE_FALLBACK,
+        effMHz = kHz(307200, 441600, 556800, 672000, 787200, 902400, 1017600, 1113600, 1228800, 1344000, 1459200, 1555200, 1670400, 1785600, 1900800, 2016000),
+    )
+
+    fun forSoc(soc: SocFamily): ClockTables = when (soc) {
+        SocFamily.KALAMA -> KALAMA
+        else -> SM8750
+    }
 
     /** `count` valores inteiros igualmente espaçados entre `minMHz` e `maxMHz`, inclusive. */
     fun evenSteps(minMHz: Int, maxMHz: Int, count: Int = 10): List<Int> {
@@ -151,7 +186,32 @@ object DeviceProfiles {
         stockGpuMaxMHz = ODIN3_STOCK_GPU_MAX_MHZ,
     )
 
-    val all: List<DeviceProfile> = listOf(ODIN3)
+    /** Odin 2 Mini: consumo do aparelho inteiro (ecrã de 6", 8 Gen 2 com ventoinha pequena). */
+    val POWER_ODIN2_MINI = PowerEnvelope(4.5f, 6.5f, 9f, 12f)
+
+    /** 8 Gen 2: só trips passivos a partir de 90 °C (os de baixo são da ventoinha / pele). */
+    private val THERMAL_KALAMA = ThermalPolicy(supported = true, minOriginalMilliC = 90_000)
+
+    /** Adreno 740 do Odin 2 Mini: 692 MHz (tabela lida no aparelho, fw 1.0.0.117). */
+    const val ODIN2_MINI_STOCK_GPU_MAX_MHZ = 692
+
+    val ODIN2_MINI = DeviceProfile(
+        id = "odin2mini",
+        name = "AYN Odin 2 Mini",
+        soc = SocFamily.KALAMA,
+        official = true,
+        power = POWER_ODIN2_MINI,
+        fallbackTables = SocTables.KALAMA,
+        gpuBackend = GpuBackend.KGSL,
+        thermal = THERMAL_KALAMA,
+        // Sem M1/M2 no Odin 2 Mini (o firmware nem tem a chave remap_custom_to_m1_value).
+        backButtons = false,
+        stockGpuMaxMHz = ODIN2_MINI_STOCK_GPU_MAX_MHZ,
+        guardFirmwareFloors = true,
+        defaultThemeIndex = com.dfdx047.odinhub.ui.theme.VITA_THEME_INDEX,
+    )
+
+    val all: List<DeviceProfile> = listOf(ODIN3, ODIN2_MINI)
 
     /** Aparelho que não é um Odin 3: corre só com as tabelas vivas do kernel, sem garantias. */
     fun generic(identity: DeviceIdentity, soc: SocFamily): DeviceProfile {
@@ -160,14 +220,25 @@ object DeviceProfiles {
             .distinct()
             .joinToString(" ")
             .ifBlank { "Android" }
-        return ODIN3.copy(
+        val base = if (soc == SocFamily.KALAMA) ODIN2_MINI else ODIN3
+        return base.copy(
             id = "generic",
             name = name,
             soc = soc,
             official = false,
-            thermal = if (soc == SocFamily.SM8750) THERMAL_SM8750 else THERMAL_UNKNOWN,
+            thermal = when (soc) {
+                SocFamily.SM8750 -> THERMAL_SM8750
+                SocFamily.KALAMA -> THERMAL_KALAMA
+                else -> THERMAL_UNKNOWN
+            },
             backButtons = false,
-            stockGpuMaxMHz = if (soc == SocFamily.SM8750) ODIN3_STOCK_GPU_MAX_MHZ else null,
+            stockGpuMaxMHz = when (soc) {
+                SocFamily.SM8750 -> ODIN3_STOCK_GPU_MAX_MHZ
+                SocFamily.KALAMA -> null
+                else -> null
+            },
+            guardFirmwareFloors = false,
+            defaultThemeIndex = 1,
         )
     }
 
@@ -177,6 +248,7 @@ object DeviceProfiles {
         val platform = identity.platform.lowercase().trim()
         return when {
             soc.contains("SM8750") || soc.contains("CQ8725") || platform == "sun" -> SocFamily.SM8750
+            soc.contains("8550") || platform == "kalama" -> SocFamily.KALAMA
             else -> SocFamily.UNKNOWN
         }
     }
@@ -189,6 +261,9 @@ object DeviceProfiles {
         val soc = socFrom(identity)
         val model = identity.model.lowercase().replace(Regex("[^a-z0-9]"), "")
         if (model.contains("odin3")) return ODIN3
+        // Build.MODEL "Odin2 Mini" (lido no aparelho). Só o Mini: o Odin 2 / Portal têm M1/M2 e
+        // outro envelope -- ficam genéricos até terem perfil próprio.
+        if (model.contains("odin2mini")) return ODIN2_MINI
         if (soc == SocFamily.SM8750 && identity.manufacturer.contains("ayn", ignoreCase = true)) return ODIN3
         return generic(identity, soc)
     }
